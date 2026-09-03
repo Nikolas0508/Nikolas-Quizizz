@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Nikolas Quizizz
-// @version      51.1
+// @version      51.2
 // @description  Assistente de questões: extrai texto/imagens, consulta a IA e mostra a resposta sem clicar/enviar automaticamente.
 // @author       Nikolas
 // @match        https://wayground.com/join/game/*
@@ -100,21 +100,10 @@
 
     function imageUrlFromElement(el) {
         if (!el) return null;
-
         if (el.tagName === 'IMG') {
-            const candidates = [
-                el.currentSrc,
-                el.src,
-                el.getAttribute('src')
-            ];
-
+            const candidates = [el.currentSrc, el.src, el.getAttribute('src')];
             const srcset = el.getAttribute('srcset');
-            if (srcset) {
-                candidates.push(
-                    srcset.split(',')[0]?.trim().split(/\s+/)[0]
-                );
-            }
-
+            if (srcset) candidates.push(srcset.split(',')[0]?.trim().split(/\s+/)[0]);
             return candidates.find(v =>
                 /^https?:\/\//i.test(v || '') ||
                 /^data:image\//i.test(v || '')
@@ -135,20 +124,14 @@
 
         for (const attr of ['data-src', 'data-image-url', 'data-url']) {
             const v = el.getAttribute?.(attr);
-            if (
-                v &&
-                (
-                    /^https?:\/\//i.test(v) ||
-                    /^data:image\//i.test(v)
-                )
-            ) {
-                return v;
-            }
+            if (v && (
+                /^https?:\/\//i.test(v) ||
+                /^data:image\//i.test(v)
+            )) return v;
         }
 
         const dataCy = el.getAttribute?.('data-cy') || '';
         const dataMatch = dataCy.match(/url\((.*?)\)/i);
-
         if (dataMatch?.[1]) {
             return dataMatch[1].replace(/^['"]|['"]$/g, '');
         }
@@ -165,9 +148,7 @@
 
         if (/avatar|logo|icon|profile|flag|emoji|brand/.test(
             `${alt} ${cls} ${src}`
-        )) {
-            return true;
-        }
+        )) return true;
 
         const r = img.getBoundingClientRect();
 
@@ -193,8 +174,7 @@
         for (
             let depth = 0;
             node && depth < 7;
-            depth++,
-            node = node.parentElement
+            depth++, node = node.parentElement
         ) {
             const rect = node.getBoundingClientRect();
 
@@ -208,28 +188,19 @@
 
             let score = 0;
 
-            if (
-                node.matches?.(
-                    '[data-testid="question-container"], .question-container'
-                )
-            ) {
-                score += 100;
-            }
+            if (node.matches?.(
+                '[data-testid="question-container"], .question-container'
+            )) score += 100;
 
             if (optionCount > 0) score += 30;
             if (imageCount > 0) score += 10;
 
-            if (rect.width > 200 && rect.height > 100) {
-                score += 5;
-            }
+            if (rect.width > 200 && rect.height > 100) score += 5;
 
             score -= depth;
 
             if (!best || score > best.score) {
-                best = {
-                    node,
-                    score
-                };
+                best = { node, score };
             }
         }
 
@@ -259,50 +230,72 @@
                 if (
                     seen.has(img) ||
                     looksLikeDecorativeImage(img)
-                ) {
-                    return;
-                }
+                ) return;
 
                 seen.add(img);
 
                 const r = img.getBoundingClientRect();
                 let score = 0;
 
+                const area = r.width * r.height;
+
+                const centerX = (r.left + r.right) / 2;
+
+                const nearCenter =
+                    Math.abs(centerX - window.innerWidth / 2);
+
+                if (area > 90000) score += 55;
+                else if (area > 40000) score += 30;
+
+                if (
+                    nearCenter <
+                    window.innerWidth * 0.2
+                ) score += 20;
+
+                if (r.top < 90 && r.width < 300) {
+                    score -= 60;
+                }
+
                 if (container.contains(img)) {
                     score += 50;
                 }
 
-                if (
-                    img.matches(
-                        '[data-testid="question-container-image"], [data-testid*="question" i]'
-                    )
-                ) {
+                if (img.matches(
+                    '[data-testid="question-container-image"], [data-testid*="question" i]'
+                )) {
                     score += 80;
                 }
 
-                if (
-                    /question|prompt|stem/i.test(
-                        `${img.className} ${img.alt} ${img.getAttribute('data-testid') || ''}`
-                    )
-                ) {
+                if (/question|prompt|stem/i.test(
+                    `${img.className} ${img.alt} ${img.getAttribute('data-testid') || ''}`
+                )) {
                     score += 30;
                 }
 
                 if (qRect) {
-                    const dy = Math.abs(r.top - qRect.bottom);
-
-                    const dx = Math.abs(
-                        (r.left + r.right) / 2 -
-                        (qRect.left + qRect.right) / 2
+                    const dy = Math.abs(
+                        r.top - qRect.bottom
                     );
 
-                    score += Math.max(0, 25 - dy / 30);
-                    score += Math.max(0, 10 - dx / 50);
+                    const dx = Math.abs(
+                        ((r.left + r.right) / 2) -
+                        ((qRect.left + qRect.right) / 2)
+                    );
+
+                    score += Math.max(
+                        0,
+                        25 - dy / 30
+                    );
+
+                    score += Math.max(
+                        0,
+                        10 - dx / 50
+                    );
                 }
 
                 score += Math.min(
                     20,
-                    (r.width * r.height) / 20000
+                    area / 20000
                 );
 
                 candidates.push({
@@ -311,7 +304,8 @@
                 });
             });
         }
-                const bgCandidates =
+
+        const bgCandidates =
             container?.querySelectorAll?.(
                 '[style*="background-image"], .option-image'
             ) || [];
@@ -328,21 +322,26 @@
             candidates.push({
                 el,
                 url,
-                score: 20 + Math.min(
-                    15,
-                    (r.width * r.height) / 20000
-                )
+                score:
+                    20 +
+                    Math.min(
+                        15,
+                        (r.width * r.height) / 20000
+                    )
             });
         });
 
-        candidates.sort((a, b) => b.score - a.score);
+        candidates.sort(
+            (a, b) => b.score - a.score
+        );
 
         const best = candidates[0];
 
         return best
             ? {
                 element: best.img || best.el,
-                url: best.url ||
+                url:
+                    best.url ||
                     imageUrlFromElement(
                         best.img || best.el
                     ),
@@ -379,14 +378,180 @@
         }
     }
 
+    function getVisibleBodyLines() {
+        return (document.body?.innerText || '')
+            .split(/\r?\n/)
+            .map(normalizeText)
+            .filter(Boolean);
+    }
+
+    function parseActivityQuestionFromBody() {
+        const lines = getVisibleBodyLines();
+
+        if (!lines.length) return null;
+
+        const markerIndex = lines.findIndex(
+            line =>
+                /^question text:?$/i.test(line) ||
+                /^texto da questão:?$/i.test(line)
+        );
+
+        const startIndex =
+            markerIndex >= 0
+                ? markerIndex + 1
+                : 0;
+
+        const optionOnly = /^([A-H])$/i;
+
+        const optionInline =
+            /^([A-H])[.)]\s+(.+)$/i;
+
+        const optionIndices = [];
+
+        for (
+            let i = startIndex;
+            i < lines.length;
+            i++
+        ) {
+            let m = lines[i].match(optionInline);
+
+            if (m) {
+                optionIndices.push({
+                    index: i,
+                    letter: m[1].toUpperCase(),
+                    inline: normalizeText(m[2])
+                });
+            } else if (
+                optionOnly.test(lines[i])
+            ) {
+                optionIndices.push({
+                    index: i,
+                    letter: lines[i].toUpperCase(),
+                    inline: ''
+                });
+            }
+        }
+
+        let chosen = null;
+
+        for (
+            let i = 0;
+            i < optionIndices.length;
+            i++
+        ) {
+            const group = [
+                optionIndices[i]
+            ];
+
+            for (
+                let j = i + 1;
+                j < optionIndices.length &&
+                group.length < 8;
+                j++
+            ) {
+                const prev =
+                    group[group.length - 1];
+
+                const cur =
+                    optionIndices[j];
+
+                if (
+                    cur.index - prev.index > 3
+                ) break;
+
+                group.push(cur);
+            }
+
+            const letters =
+                group.map(x => x.letter);
+
+            const uniqueLetters =
+                new Set(letters);
+
+            if (
+                uniqueLetters.size >= 2 &&
+                letters.every(
+                    (x, n) =>
+                        n === 0 ||
+                        x.charCodeAt(0) ===
+                        letters[n - 1].charCodeAt(0) + 1
+                )
+            ) {
+                chosen = group;
+                break;
+            }
+        }
+
+        if (!chosen) return null;
+
+        const firstOptionIndex =
+            chosen[0].index;
+
+        const ignoredUi =
+            /^(Eliminador de Respostas|Leitor de linha|Marca texto|Configurações|Tela cheia)$/i;
+
+        const questionLines =
+            lines
+                .slice(
+                    startIndex,
+                    firstOptionIndex
+                )
+                .filter(
+                    line =>
+                        !ignoredUi.test(line)
+                );
+
+        const questionText =
+            normalizeText(
+                questionLines.join(' ')
+            );
+
+        if (!questionText) return null;
+
+        const options = [];
+
+        for (const item of chosen) {
+            let text = item.inline;
+
+            if (!text) {
+                const next =
+                    lines[item.index + 1];
+
+                if (
+                    next &&
+                    !optionOnly.test(next) &&
+                    !optionInline.test(next) &&
+                    !/^(Questão|Question)\s+\d+/i.test(next)
+                ) {
+                    text = next;
+                }
+            }
+
+            if (text) {
+                options.push({
+                    letter: item.letter,
+                    text: normalizeText(text),
+                    element: null
+                });
+            }
+        }
+
+        if (options.length < 2) {
+            return null;
+        }
+
+        return {
+            questionText,
+            options
+        };
+    }
+
     function extractQuestionText(container) {
         const nodes = [
             document.querySelector('#questionText'),
             document.querySelector('[data-testid="question-text"]'),
             document.querySelector('[data-cy="question-text"]'),
-            container?.querySelector?.(
-                '[class*="question-text" i]'
-            )
+            container?.querySelector?.('[class*="question-text" i]')
         ].filter(Boolean);
 
         for (const node of nodes) {
@@ -395,6 +560,13 @@
             );
 
             if (value) return value;
+        }
+
+        const fallback =
+            parseActivityQuestionFromBody();
+
+        if (fallback?.questionText) {
+            return fallback.questionText;
         }
 
         return normalizeText(
@@ -418,7 +590,10 @@
             '[data-testid="option"]',
             '[data-cy="option"]',
             '.answer-option',
-            '.question-option'
+            '.question-option',
+            '[role="option"]',
+            '[role="radio"]',
+            '[role="checkbox"]'
         ];
 
         const found = [];
@@ -426,12 +601,16 @@
 
         for (const root of roots) {
             for (const selector of selectors) {
-                root.querySelectorAll?.(selector).forEach(el => {
-                    if (!isVisible(el) || seen.has(el)) {
-                        return;
-                    }
+                root.querySelectorAll?.(
+                    selector
+                ).forEach(el => {
+                    if (
+                        !isVisible(el) ||
+                        seen.has(el)
+                    ) return;
 
-                    const text = textFromElement(el);
+                    const text =
+                        textFromElement(el);
 
                     if (!text) return;
 
@@ -444,22 +623,46 @@
                 });
             }
 
-            if (found.length >= 2) break;
+            if (found.length >= 2) {
+                break;
+            }
+        }
+
+        if (found.length >= 2) {
+            return found;
+        }
+
+        const fallback =
+            parseActivityQuestionFromBody();
+
+        if (
+            fallback?.options?.length >= 2
+        ) {
+            console.log(
+                '[Nikolas v51.2] Alternativas extraídas pelo fallback do novo layout:',
+                fallback.options
+            );
+
+            return fallback.options;
         }
 
         return found;
     }
-
-    // ============================================================
+        // ============================================================
     // EXTRAÇÃO DA QUESTÃO
     // ============================================================
     async function extrairDadosDaQuestao() {
         try {
             await waitForStableQuestion();
 
-            const container = findQuestionContainer();
+            const container =
+                findQuestionContainer();
+
+            const activityFallback =
+                parseActivityQuestionFromBody();
 
             const questionText =
+                activityFallback?.questionText ||
                 extractQuestionText(container);
 
             const imageInfo =
@@ -467,6 +670,31 @@
 
             const questionImageUrl =
                 imageInfo?.url || null;
+
+            // Novo modo de atividade: as alternativas aparecem no texto da página,
+            // sem as classes do modo tradicional.
+            if (
+                activityFallback?.options?.length >= 2 &&
+                !document.querySelector(
+                    '.option.is-selectable'
+                ) &&
+                !document.querySelector(
+                    '[data-testid="option"]'
+                ) &&
+                !document.querySelector(
+                    '[data-cy="option"]'
+                )
+            ) {
+                return {
+                    questionText,
+                    questionImageUrl,
+                    questionType: 'single_choice',
+                    options:
+                        activityFallback.options,
+                    extractionMode:
+                        'activity-text-fallback'
+                };
+            }
 
             const dropdownButtons =
                 Array.from(
@@ -476,9 +704,11 @@
                 ).filter(isVisible);
 
             if (dropdownButtons.length > 1) {
-                let cleanQuestionText = questionText;
+                let cleanQuestionText =
+                    questionText;
 
-                const first = dropdownButtons[0];
+                const first =
+                    dropdownButtons[0];
 
                 first.click();
 
@@ -498,7 +728,9 @@
                                 popper.querySelectorAll(
                                     'button.dropdown-option'
                                 )
-                            ).map(textFromElement)
+                            ).map(
+                                textFromElement
+                            )
                         );
 
                     document.body.click();
@@ -507,20 +739,22 @@
                 }
 
                 return {
-                    questionText: cleanQuestionText,
+                    questionText:
+                        cleanQuestionText,
                     questionImageUrl,
-                    questionType: 'multi_dropdown',
-                    dropdowns: dropdownButtons.map(
-                        button => ({
-                            button
-                        })
-                    ),
+                    questionType:
+                        'multi_dropdown',
+                    dropdowns:
+                        dropdownButtons.map(
+                            button => ({ button })
+                        ),
                     allAvailableOptions
                 };
             }
 
             if (dropdownButtons.length === 1) {
-                const button = dropdownButtons[0];
+                const button =
+                    dropdownButtons[0];
 
                 button.click();
 
@@ -531,18 +765,20 @@
                         '.v-popper__popper--shown'
                     );
 
-                const options = popper
-                    ? Array.from(
-                        popper.querySelectorAll(
-                            'button.dropdown-option'
+                const options =
+                    popper
+                        ? Array.from(
+                            popper.querySelectorAll(
+                                'button.dropdown-option'
+                            )
                         )
-                    )
-                        .filter(isVisible)
-                        .map(el => ({
-                            text: textFromElement(el),
-                            element: el
-                        }))
-                    : [];
+                            .filter(isVisible)
+                            .map(el => ({
+                                text:
+                                    textFromElement(el),
+                                element: el
+                            }))
+                        : [];
 
                 if (popper) {
                     document.body.click();
@@ -551,7 +787,8 @@
                 return {
                     questionText,
                     questionImageUrl,
-                    questionType: 'dropdown',
+                    questionType:
+                        'dropdown',
                     dropdownButton: button,
                     options
                 };
@@ -566,7 +803,8 @@
                 return {
                     questionText,
                     questionImageUrl,
-                    questionType: 'equation'
+                    questionType:
+                        'equation'
                 };
             }
 
@@ -596,10 +834,11 @@
                 const dropZones =
                     droppableBlanks.map(
                         (blank, i) => ({
-                            prompt: normalizeText(
-                                blank.parentElement?.innerText ||
-                                `Lacuna ${i + 1}`
-                            ),
+                            prompt:
+                                normalizeText(
+                                    blank.parentElement?.innerText ||
+                                    `Lacuna ${i + 1}`
+                                ),
                             blankElement: blank
                         })
                     );
@@ -607,15 +846,17 @@
                 const draggableOptions =
                     dragOptions
                         .map(el => ({
-                            text: textFromElement(el),
+                            text:
+                                textFromElement(el),
                             element: el
                         }))
                         .filter(x => x.text);
 
                 return {
                     questionText:
-                        normalizeText(q.innerText) ||
-                        questionText,
+                        normalizeText(
+                            q.innerText
+                        ) || questionText,
                     questionImageUrl,
                     questionType:
                         'multi_drag_into_blank',
@@ -631,7 +872,8 @@
                 const draggableOptions =
                     dragOptions
                         .map(el => ({
-                            text: textFromElement(el),
+                            text:
+                                textFromElement(el),
                             element: el
                         }))
                         .filter(x => x.text);
@@ -643,7 +885,8 @@
                         'drag_into_blank',
                     draggableOptions,
                     dropZone: {
-                        element: droppableBlanks[0]
+                        element:
+                            droppableBlanks[0]
                     }
                 };
             }
@@ -678,7 +921,8 @@
                                 !!el.querySelector(
                                     '.option-image'
                                 ) ||
-                                el.dataset.type === 'image' ||
+                                el.dataset.type ===
+                                    'image' ||
                                 !!imageUrlFromElement(
                                     el.querySelector(
                                         '.option-image'
@@ -689,25 +933,35 @@
                     if (isImageMatch) {
                         const draggableItems =
                             draggableItemElements
-                                .map((el, i) => ({
-                                    id: `IMAGEM ${i + 1}`,
-                                    imageUrl:
-                                        imageUrlFromElement(
-                                            el.querySelector(
-                                                '.option-image'
-                                            ) || el
-                                        ),
-                                    element: el
-                                }))
-                                .filter(x => x.imageUrl);
+                                .map(
+                                    (el, i) => ({
+                                        id:
+                                            `IMAGEM ${i + 1}`,
+                                        imageUrl:
+                                            imageUrlFromElement(
+                                                el.querySelector(
+                                                    '.option-image'
+                                                ) || el
+                                            ),
+                                        element: el
+                                    })
+                                )
+                                .filter(
+                                    x => x.imageUrl
+                                );
 
                         const dropZones =
                             dropZoneElements
                                 .map(el => ({
-                                    text: textFromElement(el),
+                                    text:
+                                        textFromElement(
+                                            el
+                                        ),
                                     element: el
                                 }))
-                                .filter(x => x.text);
+                                .filter(
+                                    x => x.text
+                                );
 
                         return {
                             questionText,
@@ -722,18 +976,24 @@
                     const draggableItems =
                         draggableItemElements
                             .map(el => ({
-                                text: textFromElement(el),
+                                text:
+                                    textFromElement(el),
                                 element: el
                             }))
-                            .filter(x => x.text);
+                            .filter(
+                                x => x.text
+                            );
 
                     const dropZones =
                         dropZoneElements
                             .map(el => ({
-                                text: textFromElement(el),
+                                text:
+                                    textFromElement(el),
                                 element: el
                             }))
-                            .filter(x => x.text);
+                            .filter(
+                                x => x.text
+                            );
 
                     const questionType =
                         /reorder|ordem|sequenc/i.test(
@@ -764,8 +1024,10 @@
                 return {
                     questionText,
                     questionImageUrl,
-                    questionType: 'open_ended',
-                    answerElement: openEndedTextarea
+                    questionType:
+                        'open_ended',
+                    answerElement:
+                        openEndedTextarea
                 };
             }
 
@@ -776,10 +1038,10 @@
                 const isMultipleChoice =
                     options.some(
                         el =>
-                            el.element.classList.contains(
+                            el.element?.classList?.contains(
                                 'is-msq'
                             ) ||
-                            el.element.getAttribute(
+                            el.element?.getAttribute(
                                 'aria-multiselectable'
                             ) === 'true'
                     );
@@ -825,6 +1087,7 @@
         let formattedOptions = '';
 
         switch (quizData.questionType) {
+
             case 'multi_dropdown':
                 promptDeInstrucao =
                     `Esta é uma questão com múltiplas lacunas ([RESPOSTA X]). As opções disponíveis são um pool compartilhado e cada opção só pode ser usada uma vez. Determine a resposta correta para CADA placeholder. Responda com cada resposta em uma nova linha, no formato '[RESPOSTA X]: Resposta Correta'.`;
@@ -839,11 +1102,7 @@
                     `Esta é uma questão de combinar imagens com seus textos correspondentes. Para cada imagem, forneça o par correto no formato EXATO: 'Texto da Opção -> ID da Imagem' (ex: 90° -> IMAGEM 3), um por linha.`;
 
                 formattedOptions =
-                    `Opções de Texto:\n${
-                        quizData.dropZones
-                            .map(x => `- "${x.text}"`)
-                            .join('\n')
-                    }`;
+                    `Opções de Texto:\n${quizData.dropZones.map(x => `- "${x.text}"`).join('\n')}`;
 
                 break;
 
@@ -852,15 +1111,7 @@
                     `Responda com os pares no formato EXATO: 'Texto do Local para Soltar -> Texto do Item para Arrastar', um por linha.`;
 
                 formattedOptions =
-                    `Itens:\n${
-                        quizData.draggableItems
-                            .map(x => `- "${x.text}"`)
-                            .join('\n')
-                    }\n\nLocais:\n${
-                        quizData.dropZones
-                            .map(x => `- "${x.text}"`)
-                            .join('\n')
-                    }`;
+                    `Itens:\n${quizData.draggableItems.map(x => `- "${x.text}"`).join('\n')}\n\nLocais:\n${quizData.dropZones.map(x => `- "${x.text}"`).join('\n')}`;
 
                 break;
 
@@ -869,27 +1120,16 @@
                     `Forneça a ordem correta listando os textos dos itens, um por linha, do primeiro ao último.`;
 
                 formattedOptions =
-                    `Itens:\n${
-                        quizData.draggableItems
-                            .map(x => `- "${x.text}"`)
-                            .join('\n')
-                    }`;
+                    `Itens:\n${quizData.draggableItems.map(x => `- "${x.text}"`).join('\n')}`;
 
                 break;
-                            case 'multi_drag_into_blank':
+
+            case 'multi_drag_into_blank':
                 promptDeInstrucao =
                     `Responda com os pares no formato EXATO: 'Sentença da pergunta -> Expressão da opção', um por linha.`;
 
                 formattedOptions =
-                    `Sentenças:\n${
-                        quizData.dropZones
-                            .map(x => `- "${x.prompt}"`)
-                            .join('\n')
-                    }\n\nExpressões:\n${
-                        quizData.draggableOptions
-                            .map(x => `- "${x.text}"`)
-                            .join('\n')
-                    }`;
+                    `Sentenças:\n${quizData.dropZones.map(x => `- "${x.prompt}"`).join('\n')}\n\nExpressões:\n${quizData.draggableOptions.map(x => `- "${x.text}"`).join('\n')}`;
 
                 break;
 
@@ -908,11 +1148,7 @@
                     `Responda APENAS com o texto exato da ÚNICA alternativa correta.`;
 
                 formattedOptions =
-                    `OPÇÕES:\n${
-                        quizData.options
-                            .map(x => `- "${x.text}"`)
-                            .join('\n')
-                    }`;
+                    `OPÇÕES:\n${quizData.options.map(x => `- "${x.text}"`).join('\n')}`;
 
                 break;
 
@@ -921,11 +1157,7 @@
                     `Responda APENAS com o texto da ÚNICA opção correta que preenche a lacuna.`;
 
                 formattedOptions =
-                    `OPÇÕES:\n${
-                        quizData.draggableOptions
-                            .map(x => `- "${x.text}"`)
-                            .join('\n')
-                    }`;
+                    `OPÇÕES:\n${quizData.draggableOptions.map(x => `- "${x.text}"`).join('\n')}`;
 
                 break;
 
@@ -934,11 +1166,7 @@
                     `Responda APENAS com os textos exatos de TODAS as alternativas corretas, uma por linha.`;
 
                 formattedOptions =
-                    `OPÇÕES:\n${
-                        quizData.options
-                            .map(x => `- "${x.text}"`)
-                            .join('\n')
-                    }`;
+                    `OPÇÕES:\n${quizData.options.map(x => `- "${x.text}"`).join('\n')}`;
 
                 break;
 
@@ -986,21 +1214,15 @@
                     );
 
                 textPrompt =
-                    `Responda com os pares no formato EXATO: 'Texto do Local para Soltar -> ID da Imagem'.\n\nPERGUNTA: "${quizData.questionText}"\n\nItens:\n${
-                        quizData.draggableItems
-                            .map(x => `- "${x.text}"`)
-                            .join('\n')
-                    }\n\nLocais:\n${
-                        quizData.dropZones
-                            .map(x => `- "${x.text}"`)
-                            .join('\n')
-                    }`;
+                    `Responda com os pares no formato EXATO: 'Texto do Local para Soltar -> ID da Imagem'.\n\nPERGUNTA: "${quizData.questionText}"\n\nItens:\n${quizData.draggableItems.map(x => `- "${x.text}"`).join('\n')}\n\nLocais:\n${quizData.dropZones.map(x => `- "${x.text}"`).join('\n')}`;
             }
         }
 
         let aiResponseText = null;
 
-        if (currentAiProvider === 'gemini') {
+        if (
+            currentAiProvider === 'gemini'
+        ) {
             for (
                 let i = 0;
                 i < GEMINI_API_KEYS.length;
@@ -1013,8 +1235,12 @@
 
                 if (
                     !currentKey ||
-                    currentKey.includes('CHAVE_') ||
-                    currentKey.includes('SUA_') ||
+                    currentKey.includes(
+                        'CHAVE_'
+                    ) ||
+                    currentKey.includes(
+                        'SUA_'
+                    ) ||
                     currentKey.length < 30
                 ) {
                     currentApiKeyIndex =
@@ -1037,7 +1263,9 @@
 
                 if (base64Image) {
                     const parsed =
-                        parseDataUrl(base64Image);
+                        parseDataUrl(
+                            base64Image
+                        );
 
                     if (parsed) {
                         promptParts.push({
@@ -1071,7 +1299,9 @@
 
                         const parsed =
                             base64
-                                ? parseDataUrl(base64)
+                                ? parseDataUrl(
+                                    base64
+                                )
                                 : null;
 
                         if (parsed) {
@@ -1085,7 +1315,8 @@
                             });
 
                             promptParts.push({
-                                text: `- ${item.id}`
+                                text:
+                                    `- ${item.id}`
                             });
                         }
                     }
@@ -1101,14 +1332,13 @@
                                     'Content-Type':
                                         'application/json'
                                 },
-                                body: JSON.stringify({
-                                    contents: [
-                                        {
+                                body:
+                                    JSON.stringify({
+                                        contents: [{
                                             parts:
                                                 promptParts
-                                        }
-                                    ]
-                                })
+                                        }]
+                                    })
                             }
                         );
 
@@ -1117,7 +1347,9 @@
                             await response.json();
 
                         aiResponseText =
-                            extractGeminiText(data);
+                            extractGeminiText(
+                                data
+                            );
 
                         if (aiResponseText) {
                             break;
@@ -1127,15 +1359,15 @@
                             '[Nikolas v51.1] Gemini respondeu sem texto utilizável.',
                             data
                         );
+
                     } else {
                         const errorData =
-                            await safeJson(response);
+                            await safeJson(
+                                response
+                            );
 
                         console.warn(
-                            `[Nikolas v51.1] Gemini #${currentApiKeyIndex + 1}: ${
-                                errorData?.error?.message ||
-                                `HTTP ${response.status}`
-                            }`
+                            `[Nikolas v51.1] Gemini #${currentApiKeyIndex + 1}: ${errorData?.error?.message || `HTTP ${response.status}`}`
                         );
                     }
 
@@ -1165,7 +1397,9 @@
 
                 if (
                     !currentKey ||
-                    currentKey.includes('SUA_') ||
+                    currentKey.includes(
+                        'SUA_'
+                    ) ||
                     currentKey.length < 30
                 ) {
                     currentOpenRouterKeyIndex =
@@ -1196,18 +1430,19 @@
                                     'X-Title':
                                         'Nikolas Quizizz'
                                 },
-                                body: JSON.stringify({
-                                    model:
-                                        DEEPSEEK_MODEL_NAME,
-                                    messages: [
-                                        {
-                                            role: 'user',
+                                body:
+                                    JSON.stringify({
+                                        model:
+                                            DEEPSEEK_MODEL_NAME,
+                                        messages: [{
+                                            role:
+                                                'user',
                                             content:
                                                 textPrompt
-                                        }
-                                    ],
-                                    max_tokens: 1024
-                                })
+                                        }],
+                                        max_tokens:
+                                            1024
+                                    })
                             }
                         );
 
@@ -1219,7 +1454,8 @@
                             data?.choices
                                 ?.map(
                                     x =>
-                                        x?.message?.content
+                                        x?.message
+                                            ?.content
                                 )
                                 .filter(Boolean)
                                 .join('\n') ||
@@ -1231,13 +1467,12 @@
 
                     } else {
                         const errorData =
-                            await safeJson(response);
+                            await safeJson(
+                                response
+                            );
 
                         console.warn(
-                            `[Nikolas v51.1] OpenRouter #${currentOpenRouterKeyIndex + 1}: ${
-                                errorData?.error?.message ||
-                                `HTTP ${response.status}`
-                            }`
+                            `[Nikolas v51.1] OpenRouter #${currentOpenRouterKeyIndex + 1}: ${errorData?.error?.message || `HTTP ${response.status}`}`
                         );
                     }
 
@@ -1317,8 +1552,7 @@
             data: match[2]
         };
     }
-
-    // ============================================================
+        // ============================================================
     // RESULTADO — somente exibe. Não seleciona nem envia respostas.
     // ============================================================
     function showResult(answer, quizData) {
@@ -1365,39 +1599,31 @@
         const title =
             document.createElement('div');
 
-        title.textContent =
-    'Nikolas Scripts - Resposta da IA';
+        title.textContent = 'Nikolas Scripts - Resposta da IA';
 
-        title.style.fontWeight =
-            '700';
-
-        title.style.marginBottom =
-            '8px';
-
-        title.style.color =
-            '#66ffff';
+        title.style.fontWeight = '700';
+        title.style.marginBottom = '8px';
+        title.style.color = '#66ffff';
 
         const body =
             document.createElement('div');
 
-        body.textContent =
-            answer;
+        body.textContent = answer;
 
         box.append(
             title,
             body
         );
 
-        document.body.appendChild(
-            box
-        );
+        document.body.appendChild(box);
 
         setTimeout(
             () => box.remove(),
             12000
         );
     }
-        async function performAction(
+
+    async function performAction(
         aiAnswerText,
         quizData
     ) {
@@ -1451,9 +1677,7 @@
         style.textContent =
             `html[data-nikolas-cursor="${state}"] *,html[data-nikolas-cursor="${state}"]{cursor:url("data:image/svg+xml,${encodeURIComponent(svg)}") 16 16,auto !important}`;
 
-        document.head.appendChild(
-            style
-        );
+        document.head.appendChild(style);
     }
 
     function showStatus(
@@ -1493,11 +1717,7 @@
                 background:
                     'rgba(10,14,18,.9)',
                 border:
-                    `1px solid ${
-                        error
-                            ? '#ff3b6b'
-                            : '#00ffff'
-                    }`,
+                    `1px solid ${error ? '#ff3b6b' : '#00ffff'}`,
                 color: '#fff',
                 font:
                     '600 12px system-ui',
@@ -1506,9 +1726,7 @@
             }
         );
 
-        document.body.appendChild(
-            el
-        );
+        document.body.appendChild(el);
 
         setTimeout(
             () => el.remove(),
@@ -1540,11 +1758,7 @@
             }
 
             const fingerprint =
-                `${quizData.questionType}|${quizData.questionText}|${
-                    quizData.options
-                        ?.map(x => x.text)
-                        .join('|') || ''
-                }`;
+                `${quizData.questionType}|${quizData.questionText}|${quizData.options?.map(x => x.text).join('|') || ''}`;
 
             lastQuestionFingerprint =
                 fingerprint;
@@ -1617,9 +1831,7 @@
             if (
                 event.code !== 'Space' ||
                 event.repeat
-            ) {
-                return;
-            }
+            ) return;
 
             const target =
                 event.target;
@@ -1634,9 +1846,7 @@
                         'input,textarea,select,[contenteditable="true"]'
                     )
                 )
-            ) {
-                return;
-            }
+            ) return;
 
             event.preventDefault();
 
@@ -1685,10 +1895,7 @@
                     )
                 ) {
                     throw new Error(
-                        `Tipo recebido: ${
-                            blob.type ||
-                            'desconhecido'
-                        }`
+                        `Tipo recebido: ${blob.type || 'desconhecido'}`
                     );
                 }
 
@@ -1744,10 +1951,7 @@
                 )
             ) {
                 throw new Error(
-                    `Resposta não é imagem (${
-                        blob.type ||
-                        'tipo desconhecido'
-                    })`
+                    `Resposta não é imagem (${blob.type || 'tipo desconhecido'})`
                 );
             }
 
@@ -1829,22 +2033,13 @@
             clearTimeout(id);
         }
     }
-
-    // ============================================================
+        // ============================================================
     // DETECTOR DE QUIZ ID (mantido para compatibilidade)
     // ============================================================
-    function logQuizId(
-        id,
-        source
-    ) {
-        if (
-            id === quizIdDetected
-        ) {
-            return;
-        }
+    function logQuizId(id, source) {
+        if (id === quizIdDetected) return;
 
-        quizIdDetected =
-            id;
+        quizIdDetected = id;
 
         console.log(
             `[Quizizz Bypass] Novo Quiz ID detectado (${source}): ${id}`
@@ -1868,9 +2063,7 @@
 
         if (
             originalFetch.__nikolasWrapped
-        ) {
-            return;
-        }
+        ) return;
 
         const wrapped =
             async function (...args) {
@@ -1918,9 +2111,7 @@
 
         if (
             originalOpen.__nikolasWrapped
-        ) {
-            return;
-        }
+        ) return;
 
         function wrapped(
             method,
@@ -1952,9 +2143,7 @@
         wrapped.__nikolasWrapped =
             true;
 
-        XMLHttpRequest
-            .prototype
-            .open =
+        XMLHttpRequest.prototype.open =
             wrapped;
     }
 
@@ -1974,6 +2163,7 @@
         ) {
             interceptFetch();
             interceptXHR();
+
             interceptorsStarted =
                 true;
         }
@@ -2021,5 +2211,4 @@
     console.log(
         '[Nikolas v51.1] Carregado. Pressione ESPAÇO para analisar a questão.'
     );
-
 })();
