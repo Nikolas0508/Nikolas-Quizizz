@@ -1366,7 +1366,7 @@
             document.createElement('div');
 
         title.textContent =
-            `✓ ${quizData.questionType.replaceAll('_', ' ')} — resposta da IA`;
+    'Nikolas Scripts - Resposta da IA';
 
         title.style.fontWeight =
             '700';
