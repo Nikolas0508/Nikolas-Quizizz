@@ -1995,7 +1995,7 @@
     async function fetchWithTimeout(
         resource,
         options = {},
-        timeout = 15000
+        timeout = 30000
     ) {
         const controller =
             new AbortController();
