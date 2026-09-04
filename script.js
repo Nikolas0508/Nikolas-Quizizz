@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Nikolas Quizizz
-// @version      51.2
-// @description  Assistente de questões: extrai texto/imagens, consulta a IA e mostra a resposta sem clicar/enviar automaticamente.
+// @name         Nikolas Quizizz v52
+// @version      52.0
+// @description  Assistente de questões: extrai texto/imagens, consulta IA, usa cache e mostra a resposta sem clicar/enviar automaticamente.
 // @author       Nikolas
 // @match        https://wayground.com/join/game/*
 // @grant        none
@@ -10,1066 +10,1124 @@
 (function () {
     'use strict';
 
-    // ============================================================
-    // CHAVES — mantenha as suas aqui ou injete-as pelo bookmarklet.
-    // ============================================================
+    /*
+     * ============================================================
+     * NIKOLAS QUIZIZZ v52
+     * ============================================================
+     * Melhorias principais:
+     * - cache de respostas por questão
+     * - detecção de layout mais tolerante
+     * - rotação de chaves com tratamento de 401/403/429/5xx
+     * - timeout de requisições
+     * - suporte a texto e imagens
+     * - redução de chamadas duplicadas
+     * - interface de status
+     * - resposta exibida sem clicar/enviar automaticamente
+     * ============================================================
+     */
+
+    const CONFIG = {
+        provider: 'gemini',
+
+        geminiModel:
+            'gemini-2.5-flash',
+
+        openRouterModel:
+            'deepseek/deepseek-chat-v3-0324:free',
+
+        requestTimeout:
+            30000,
+
+        cacheTtl:
+            1000 * 60 * 60 * 6,
+
+        maxQuestionLength:
+            12000,
+
+        maxImageBytes:
+            4 * 1024 * 1024,
+
+        debug:
+            true
+    };
+
     const GEMINI_API_KEYS = [
-        "CHAVE_GEMINI_1",
-        "CHAVE_GEMINI_2",
-        "CHAVE_GEMINI_3"
+        // COLOQUE SUAS CHAVES GEMINI AQUI
+        ''
     ];
 
     const OPENROUTER_API_KEYS = [
-        "SUA_CHAVE_OPENROUTER_1",
-        "SUA_CHAVE_OPENROUTER_2",
-        "SUA_CHAVE_OPENROUTER_3"
+        // COLOQUE SUAS CHAVES OPENROUTER AQUI
+        ''
     ];
 
-    const DEEPSEEK_MODEL_NAME = "deepseek/deepseek-chat";
-    let currentAiProvider = 'gemini';
-    let currentApiKeyIndex = 0;
-    let currentOpenRouterKeyIndex = 0;
-    let lastAiResponse = '';
     let busy = false;
-    let lastQuestionFingerprint = '';
 
-    const regexQuizId = /\/(?:quiz|quizzes|admin\/quiz|games|attempts|join)\/([a-f0-9]{24})/i;
-    let quizIdDetected = null;
-    let interceptorsStarted = false;
+    let currentGeminiKeyIndex =
+        0;
 
-    // ============================================================
-    // UTILITÁRIOS
-    // ============================================================
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    let currentOpenRouterKeyIndex =
+        0;
 
-    function normalizeText(value) {
-        return String(value || '')
-            .replace(/\u00a0/g, ' ')
-            .replace(/[\r\n\t]+/g, ' ')
-            .replace(/\s+/g, ' ')
+    let lastQuestionFingerprint =
+        '';
+
+    const answerCache =
+        new Map();
+
+    function log(
+        ...args
+    ) {
+        if (!CONFIG.debug) return;
+
+        console.log(
+            '[Nikolas v52]',
+            ...args
+        );
+    }
+
+    function warn(
+        ...args
+    ) {
+        console.warn(
+            '[Nikolas v52]',
+            ...args
+        );
+    }
+
+    function sleep(
+        ms
+    ) {
+        return new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    ms
+                )
+        );
+    }
+
+    function isConfiguredKey(
+        key
+    ) {
+        return (
+            typeof key ===
+                'string' &&
+            key.trim().length >
+                10
+        );
+    }
+
+    function normalizeText(
+        text
+    ) {
+        return String(
+            text || ''
+        )
+            .replace(
+                /\s+/g,
+                ' '
+            )
             .trim();
     }
 
-    function normalizeForMatch(value) {
-        return normalizeText(value)
+    function normalizeForFingerprint(
+        text
+    ) {
+        return normalizeText(
+            text
+        )
             .toLowerCase()
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .replace(/["'`]/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
-
-    function isVisible(el) {
-        if (!el || !(el instanceof Element)) return false;
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== 'none' && style.visibility !== 'hidden' &&
-            parseFloat(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0;
-    }
-
-    function uniqueStrings(items) {
-        const seen = new Set();
-        return items.map(normalizeText).filter(v => {
-            const k = normalizeForMatch(v);
-            if (!k || seen.has(k)) return false;
-            seen.add(k);
-            return true;
-        });
-    }
-
-    function textFromElement(el) {
-        if (!el) return '';
-        const selectors = [
-            '#optionText', '.option-text', '[data-testid="option-text"]',
-            '.dnd-option-text', '[data-cy="option-text"]', '.match-order-option-text',
-            '[aria-label]', '[title]'
-        ];
-        for (const selector of selectors) {
-            const node = el.matches?.(selector) ? el : el.querySelector?.(selector);
-            if (node) {
-                const attr = node.getAttribute?.('aria-label') || node.getAttribute?.('title');
-                const value = normalizeText(attr || node.innerText || node.textContent);
-                if (value) return value;
-            }
-        }
-        const annotation = el.querySelector?.('annotation[encoding="application/x-tex"]');
-        if (annotation?.textContent) return normalizeText(annotation.textContent);
-        return normalizeText(el.innerText || el.textContent);
-    }
-
-    function imageUrlFromElement(el) {
-        if (!el) return null;
-        if (el.tagName === 'IMG') {
-            const candidates = [el.currentSrc, el.src, el.getAttribute('src')];
-            const srcset = el.getAttribute('srcset');
-            if (srcset) candidates.push(srcset.split(',')[0]?.trim().split(/\s+/)[0]);
-            return candidates.find(v =>
-                /^https?:\/\//i.test(v || '') ||
-                /^data:image\//i.test(v || '')
-            ) || null;
-        }
-
-        const style = getComputedStyle(el);
-        const bg = style.backgroundImage || el.style?.backgroundImage || '';
-        const match = bg.match(/url\(\s*["']?(.*?)["']?\s*\)/i);
-
-        if (match?.[1]) {
-            try {
-                return new URL(match[1], location.href).href;
-            } catch (_) {
-                return match[1];
-            }
-        }
-
-        for (const attr of ['data-src', 'data-image-url', 'data-url']) {
-            const v = el.getAttribute?.(attr);
-            if (v && (
-                /^https?:\/\//i.test(v) ||
-                /^data:image\//i.test(v)
-            )) return v;
-        }
-
-        const dataCy = el.getAttribute?.('data-cy') || '';
-        const dataMatch = dataCy.match(/url\((.*?)\)/i);
-        if (dataMatch?.[1]) {
-            return dataMatch[1].replace(/^['"]|['"]$/g, '');
-        }
-
-        return null;
-    }
-
-    function looksLikeDecorativeImage(img) {
-        if (!img || !isVisible(img)) return true;
-
-        const src = (img.currentSrc || img.src || '').toLowerCase();
-        const alt = (img.alt || '').toLowerCase();
-        const cls = (img.className || '').toString().toLowerCase();
-
-        if (/avatar|logo|icon|profile|flag|emoji|brand/.test(
-            `${alt} ${cls} ${src}`
-        )) return true;
-
-        const r = img.getBoundingClientRect();
-
-        if (r.width < 35 || r.height < 35) return true;
-
-        return false;
-    }
-
-    function findQuestionContainer() {
-        const q = document.querySelector(
-            '#questionText, [data-testid="question-text"], [data-cy="question-text"]'
-        );
-
-        if (!q) {
-            return document.querySelector(
-                '[data-testid="question-container"], .question-container'
-            ) || document.body;
-        }
-
-        let best = null;
-        let node = q;
-
-        for (
-            let depth = 0;
-            node && depth < 7;
-            depth++, node = node.parentElement
-        ) {
-            const rect = node.getBoundingClientRect();
-
-            const optionCount =
-                node.querySelectorAll?.(
-                    '.option.is-selectable, button.options-dropdown, .drag-option, .match-order-option'
-                )?.length || 0;
-
-            const imageCount =
-                node.querySelectorAll?.('img')?.length || 0;
-
-            let score = 0;
-
-            if (node.matches?.(
-                '[data-testid="question-container"], .question-container'
-            )) score += 100;
-
-            if (optionCount > 0) score += 30;
-            if (imageCount > 0) score += 10;
-
-            if (rect.width > 200 && rect.height > 100) score += 5;
-
-            score -= depth;
-
-            if (!best || score > best.score) {
-                best = { node, score };
-            }
-        }
-
-        return best?.node || q.parentElement || document.body;
-    }
-
-    function findQuestionImage(container) {
-        const qText = document.querySelector(
-            '#questionText, [data-testid="question-text"], [data-cy="question-text"]'
-        );
-
-        const qRect = qText?.getBoundingClientRect();
-        const candidates = [];
-
-        const roots = [
-            container,
-            qText?.parentElement,
-            document.body
-        ];
-
-        const seen = new Set();
-
-        for (const root of roots) {
-            if (!root) continue;
-
-            root.querySelectorAll?.('img').forEach(img => {
-                if (
-                    seen.has(img) ||
-                    looksLikeDecorativeImage(img)
-                ) return;
-
-                seen.add(img);
-
-                const r = img.getBoundingClientRect();
-                let score = 0;
-
-                const area = r.width * r.height;
-
-                const centerX = (r.left + r.right) / 2;
-
-                const nearCenter =
-                    Math.abs(centerX - window.innerWidth / 2);
-
-                if (area > 90000) score += 55;
-                else if (area > 40000) score += 30;
-
-                if (
-                    nearCenter <
-                    window.innerWidth * 0.2
-                ) score += 20;
-
-                if (r.top < 90 && r.width < 300) {
-                    score -= 60;
-                }
-
-                if (container.contains(img)) {
-                    score += 50;
-                }
-
-                if (img.matches(
-                    '[data-testid="question-container-image"], [data-testid*="question" i]'
-                )) {
-                    score += 80;
-                }
-
-                if (/question|prompt|stem/i.test(
-                    `${img.className} ${img.alt} ${img.getAttribute('data-testid') || ''}`
-                )) {
-                    score += 30;
-                }
-
-                if (qRect) {
-                    const dy = Math.abs(
-                        r.top - qRect.bottom
-                    );
-
-                    const dx = Math.abs(
-                        ((r.left + r.right) / 2) -
-                        ((qRect.left + qRect.right) / 2)
-                    );
-
-                    score += Math.max(
-                        0,
-                        25 - dy / 30
-                    );
-
-                    score += Math.max(
-                        0,
-                        10 - dx / 50
-                    );
-                }
-
-                score += Math.min(
-                    20,
-                    area / 20000
-                );
-
-                candidates.push({
-                    img,
-                    score
-                });
-            });
-        }
-
-        const bgCandidates =
-            container?.querySelectorAll?.(
-                '[style*="background-image"], .option-image'
-            ) || [];
-
-        bgCandidates.forEach(el => {
-            if (!isVisible(el)) return;
-
-            const url = imageUrlFromElement(el);
-
-            if (!url) return;
-
-            const r = el.getBoundingClientRect();
-
-            candidates.push({
-                el,
-                url,
-                score:
-                    20 +
-                    Math.min(
-                        15,
-                        (r.width * r.height) / 20000
-                    )
-            });
-        });
-
-        candidates.sort(
-            (a, b) => b.score - a.score
-        );
-
-        const best = candidates[0];
-
-        return best
-            ? {
-                element: best.img || best.el,
-                url:
-                    best.url ||
-                    imageUrlFromElement(
-                        best.img || best.el
-                    ),
-                score: best.score
-            }
-            : null;
-    }
-
-    async function waitForStableQuestion(timeout = 1200) {
-        const start = Date.now();
-        let previous = '';
-        let stable = 0;
-
-        while (Date.now() - start < timeout) {
-            const q = document.querySelector(
-                '#questionText, [data-testid="question-text"], [data-cy="question-text"]'
+            .replace(
+                /[\u200B-\u200D\uFEFF]/g,
+                ''
             );
-
-            const value = normalizeText(
-                q?.innerText || q?.textContent
-            );
-
-            if (value && value === previous) {
-                stable += 1;
-            } else {
-                stable = 0;
-            }
-
-            previous = value;
-
-            if (stable >= 2) return;
-
-            await sleep(120);
-        }
     }
 
-    function getVisibleBodyLines() {
-        return (document.body?.innerText || '')
-            .split(/\r?\n/)
-            .map(normalizeText)
-            .filter(Boolean);
-    }
-
-    function parseActivityQuestionFromBody() {
-        const lines = getVisibleBodyLines();
-
-        if (!lines.length) return null;
-
-        const markerIndex = lines.findIndex(
-            line =>
-                /^question text:?$/i.test(line) ||
-                /^texto da questão:?$/i.test(line)
-        );
-
-        const startIndex =
-            markerIndex >= 0
-                ? markerIndex + 1
-                : 0;
-
-        const optionOnly = /^([A-H])$/i;
-
-        const optionInline =
-            /^([A-H])[.)]\s+(.+)$/i;
-
-        const optionIndices = [];
-
-        for (
-            let i = startIndex;
-            i < lines.length;
-            i++
-        ) {
-            let m = lines[i].match(optionInline);
-
-            if (m) {
-                optionIndices.push({
-                    index: i,
-                    letter: m[1].toUpperCase(),
-                    inline: normalizeText(m[2])
-                });
-            } else if (
-                optionOnly.test(lines[i])
-            ) {
-                optionIndices.push({
-                    index: i,
-                    letter: lines[i].toUpperCase(),
-                    inline: ''
-                });
-            }
-        }
-
-        let chosen = null;
-
-        for (
-            let i = 0;
-            i < optionIndices.length;
-            i++
-        ) {
-            const group = [
-                optionIndices[i]
-            ];
-
-            for (
-                let j = i + 1;
-                j < optionIndices.length &&
-                group.length < 8;
-                j++
-            ) {
-                const prev =
-                    group[group.length - 1];
-
-                const cur =
-                    optionIndices[j];
-
-                if (
-                    cur.index - prev.index > 3
-                ) break;
-
-                group.push(cur);
-            }
-
-            const letters =
-                group.map(x => x.letter);
-
-            const uniqueLetters =
-                new Set(letters);
-
-            if (
-                uniqueLetters.size >= 2 &&
-                letters.every(
-                    (x, n) =>
-                        n === 0 ||
-                        x.charCodeAt(0) ===
-                        letters[n - 1].charCodeAt(0) + 1
+    function getFingerprint(
+        quizData
+    ) {
+        return [
+            quizData?.questionType ||
+                '',
+            normalizeForFingerprint(
+                quizData?.questionText ||
+                    ''
+            ),
+            ...(quizData?.options || [])
+                .map(
+                    option =>
+                        normalizeForFingerprint(
+                            option?.text ||
+                                ''
+                        )
                 )
-            ) {
-                chosen = group;
-                break;
-            }
-        }
+        ].join(
+            '|'
+        );
+    }
 
-        if (!chosen) return null;
-
-        const firstOptionIndex =
-            chosen[0].index;
-
-        const ignoredUi =
-            /^(Eliminador de Respostas|Leitor de linha|Marca texto|Configurações|Tela cheia)$/i;
-
-        const questionLines =
-            lines
-                .slice(
-                    startIndex,
-                    firstOptionIndex
-                )
-                .filter(
-                    line =>
-                        !ignoredUi.test(line)
-                );
-
-        const questionText =
-            normalizeText(
-                questionLines.join(' ')
+    function getCachedAnswer(
+        fingerprint
+    ) {
+        const entry =
+            answerCache.get(
+                fingerprint
             );
 
-        if (!questionText) return null;
-
-        const options = [];
-
-        for (const item of chosen) {
-            let text = item.inline;
-
-            if (!text) {
-                const next =
-                    lines[item.index + 1];
-
-                if (
-                    next &&
-                    !optionOnly.test(next) &&
-                    !optionInline.test(next) &&
-                    !/^(Questão|Question)\s+\d+/i.test(next)
-                ) {
-                    text = next;
-                }
-            }
-
-            if (text) {
-                options.push({
-                    letter: item.letter,
-                    text: normalizeText(text),
-                    element: null
-                });
-            }
-        }
-
-        if (options.length < 2) {
+        if (!entry) {
             return null;
         }
 
-        return {
-            questionText,
-            options
-        };
-    }
-
-    function extractQuestionText(container) {
-        const nodes = [
-            document.querySelector('#questionText'),
-            document.querySelector('[data-testid="question-text"]'),
-            document.querySelector('[data-cy="question-text"]'),
-            container?.querySelector?.('[class*="question-text" i]')
-        ].filter(Boolean);
-
-        for (const node of nodes) {
-            const value = normalizeText(
-                node.innerText || node.textContent
+        if (
+            Date.now() -
+                entry.timestamp >
+            CONFIG.cacheTtl
+        ) {
+            answerCache.delete(
+                fingerprint
             );
 
-            if (value) return value;
+            return null;
         }
 
-        const fallback =
-            parseActivityQuestionFromBody();
+        return entry.answer;
+    }
 
-        if (fallback?.questionText) {
-            return fallback.questionText;
+    function setCachedAnswer(
+        fingerprint,
+        answer
+    ) {
+        if (
+            !fingerprint ||
+            !answer
+        ) {
+            return;
+        }
+
+        answerCache.set(
+            fingerprint,
+            {
+                answer,
+                timestamp:
+                    Date.now()
+            }
+        );
+
+        if (
+            answerCache.size >
+            100
+        ) {
+            const firstKey =
+                answerCache.keys()
+                    .next()
+                    .value;
+
+            answerCache.delete(
+                firstKey
+            );
+        }
+    }
+
+    function getText(
+        element
+    ) {
+        if (!element) {
+            return '';
         }
 
         return normalizeText(
-            container?.innerText || ''
-        )
-            .split(/\n+/)
-            .map(normalizeText)
-            .filter(Boolean)
-            .slice(0, 3)
-            .join(' ');
+            element.innerText ||
+            element.textContent ||
+            ''
+        );
     }
 
-    function extractOptions(container) {
-        const roots = [
-            container,
-            document
-        ].filter(Boolean);
-
-        const selectors = [
-            '.option.is-selectable',
-            '[data-testid="option"]',
-            '[data-cy="option"]',
-            '.answer-option',
-            '.question-option',
-            '[role="option"]',
-            '[role="radio"]',
-            '[role="checkbox"]'
-        ];
-
-        const found = [];
-        const seen = new Set();
-
-        for (const root of roots) {
-            for (const selector of selectors) {
-                root.querySelectorAll?.(
-                    selector
-                ).forEach(el => {
-                    if (
-                        !isVisible(el) ||
-                        seen.has(el)
-                    ) return;
-
-                    const text =
-                        textFromElement(el);
-
-                    if (!text) return;
-
-                    seen.add(el);
-
-                    found.push({
-                        text,
-                        element: el
-                    });
-                });
-            }
-
-            if (found.length >= 2) {
-                break;
-            }
+    function isVisible(
+        element
+    ) {
+        if (!element) {
+            return false;
         }
 
-        if (found.length >= 2) {
-            return found;
-        }
-
-        const fallback =
-            parseActivityQuestionFromBody();
-
-        if (
-            fallback?.options?.length >= 2
-        ) {
-            console.log(
-                '[Nikolas v51.2] Alternativas extraídas pelo fallback do novo layout:',
-                fallback.options
+        const style =
+            getComputedStyle(
+                element
             );
 
-            return fallback.options;
+        if (
+            style.display ===
+                'none' ||
+            style.visibility ===
+                'hidden' ||
+            Number(
+                style.opacity
+            ) === 0
+        ) {
+            return false;
         }
 
-        return found;
+        const rect =
+            element.getBoundingClientRect();
+
+        return (
+            rect.width > 0 &&
+            rect.height > 0
+        );
     }
-        // ============================================================
-    // EXTRAÇÃO DA QUESTÃO
-    // ============================================================
-    async function extrairDadosDaQuestao() {
-        try {
-            await waitForStableQuestion();
 
-            const container =
-                findQuestionContainer();
-
-            const activityFallback =
-                parseActivityQuestionFromBody();
-
-            const questionText =
-                activityFallback?.questionText ||
-                extractQuestionText(container);
-
-            const imageInfo =
-                findQuestionImage(container);
-
-            const questionImageUrl =
-                imageInfo?.url || null;
-
-            // Novo modo de atividade: as alternativas aparecem no texto da página,
-            // sem as classes do modo tradicional.
-            if (
-                activityFallback?.options?.length >= 2 &&
-                !document.querySelector(
-                    '.option.is-selectable'
-                ) &&
-                !document.querySelector(
-                    '[data-testid="option"]'
-                ) &&
-                !document.querySelector(
-                    '[data-cy="option"]'
+    function uniqueElements(
+        elements
+    ) {
+        return [
+            ...new Set(
+                elements.filter(
+                    Boolean
                 )
-            ) {
-                return {
-                    questionText,
-                    questionImageUrl,
-                    questionType: 'single_choice',
-                    options:
-                        activityFallback.options,
-                    extractionMode:
-                        'activity-text-fallback'
-                };
-            }
+            )
+        ];
+    }
 
-            const dropdownButtons =
-                Array.from(
-                    document.querySelectorAll(
-                        'button.options-dropdown'
+    function collectTextCandidates() {
+        const selectors = [
+            '[data-testid*="question"]',
+            '[data-testid*="Question"]',
+            '[class*="question"]',
+            '[class*="Question"]',
+            '[class*="prompt"]',
+            '[class*="Prompt"]',
+            '[aria-label*="question" i]',
+            '[aria-label*="Question" i]'
+        ];
+
+        const result = [];
+
+        for (
+            const selector of
+            selectors
+        ) {
+            try {
+                result.push(
+                    ...document.querySelectorAll(
+                        selector
                     )
-                ).filter(isVisible);
+                );
+            } catch (_) {}
+        }
 
-            if (dropdownButtons.length > 1) {
-                let cleanQuestionText =
-                    questionText;
+        return uniqueElements(
+            result
+        ).filter(
+            isVisible
+        );
+    }
 
-                const first =
-                    dropdownButtons[0];
+    function chooseBestQuestionElement(
+        elements
+    ) {
+        if (
+            !elements.length
+        ) {
+            return null;
+        }
 
-                first.click();
-
-                await sleep(100);
-
-                let allAvailableOptions = [];
-
-                const popper =
-                    document.querySelector(
-                        '.v-popper__popper--shown'
-                    );
-
-                if (popper) {
-                    allAvailableOptions =
-                        uniqueStrings(
-                            Array.from(
-                                popper.querySelectorAll(
-                                    'button.dropdown-option'
-                                )
-                            ).map(
-                                textFromElement
-                            )
+        const scored =
+            elements.map(
+                element => {
+                    const text =
+                        getText(
+                            element
                         );
 
-                    document.body.click();
+                    let score =
+                        0;
 
-                    await sleep(80);
-                }
-
-                return {
-                    questionText:
-                        cleanQuestionText,
-                    questionImageUrl,
-                    questionType:
-                        'multi_dropdown',
-                    dropdowns:
-                        dropdownButtons.map(
-                            button => ({ button })
-                        ),
-                    allAvailableOptions
-                };
-            }
-
-            if (dropdownButtons.length === 1) {
-                const button =
-                    dropdownButtons[0];
-
-                button.click();
-
-                await sleep(100);
-
-                const popper =
-                    document.querySelector(
-                        '.v-popper__popper--shown'
-                    );
-
-                const options =
-                    popper
-                        ? Array.from(
-                            popper.querySelectorAll(
-                                'button.dropdown-option'
-                            )
-                        )
-                            .filter(isVisible)
-                            .map(el => ({
-                                text:
-                                    textFromElement(el),
-                                element: el
-                            }))
-                        : [];
-
-                if (popper) {
-                    document.body.click();
-                }
-
-                return {
-                    questionText,
-                    questionImageUrl,
-                    questionType:
-                        'dropdown',
-                    dropdownButton: button,
-                    options
-                };
-            }
-
-            const equationEditor =
-                document.querySelector(
-                    'div[data-cy="equation-editor"]'
-                );
-
-            if (equationEditor) {
-                return {
-                    questionText,
-                    questionImageUrl,
-                    questionType:
-                        'equation'
-                };
-            }
-
-            const droppableBlanks =
-                Array.from(
-                    document.querySelectorAll(
-                        'button.droppable-blank'
-                    )
-                ).filter(isVisible);
-
-            const dragOptions =
-                Array.from(
-                    document.querySelectorAll(
-                        '.drag-option'
-                    )
-                ).filter(isVisible);
-
-            if (
-                droppableBlanks.length > 1 &&
-                dragOptions.length > 0
-            ) {
-                const q =
-                    document.querySelector(
-                        '.drag-drop-text > div'
-                    ) || container;
-
-                const dropZones =
-                    droppableBlanks.map(
-                        (blank, i) => ({
-                            prompt:
-                                normalizeText(
-                                    blank.parentElement?.innerText ||
-                                    `Lacuna ${i + 1}`
-                                ),
-                            blankElement: blank
-                        })
-                    );
-
-                const draggableOptions =
-                    dragOptions
-                        .map(el => ({
-                            text:
-                                textFromElement(el),
-                            element: el
-                        }))
-                        .filter(x => x.text);
-
-                return {
-                    questionText:
-                        normalizeText(
-                            q.innerText
-                        ) || questionText,
-                    questionImageUrl,
-                    questionType:
-                        'multi_drag_into_blank',
-                    draggableOptions,
-                    dropZones
-                };
-            }
-
-            if (
-                droppableBlanks.length === 1 &&
-                dragOptions.length > 0
-            ) {
-                const draggableOptions =
-                    dragOptions
-                        .map(el => ({
-                            text:
-                                textFromElement(el),
-                            element: el
-                        }))
-                        .filter(x => x.text);
-
-                return {
-                    questionText,
-                    questionImageUrl,
-                    questionType:
-                        'drag_into_blank',
-                    draggableOptions,
-                    dropZone: {
-                        element:
-                            droppableBlanks[0]
+                    if (
+                        text.length >=
+                        10
+                    ) {
+                        score +=
+                            Math.min(
+                                text.length /
+                                    20,
+                                20
+                            );
                     }
-                };
-            }
 
-            const matchContainer =
-                document.querySelector(
-                    '.match-order-options-container, .question-options-layout'
-                );
+                    if (
+                        text.length >
+                        500
+                    ) {
+                        score -=
+                            5;
+                    }
 
-            if (matchContainer) {
-                const draggableItemElements =
-                    Array.from(
-                        matchContainer.querySelectorAll(
-                            '.match-order-option.is-option-tile'
-                        )
-                    ).filter(isVisible);
+                    const rect =
+                        element.getBoundingClientRect();
 
-                const dropZoneElements =
-                    Array.from(
-                        matchContainer.querySelectorAll(
-                            '.match-order-option.is-drop-tile'
-                        )
-                    ).filter(isVisible);
-
-                if (
-                    draggableItemElements.length &&
-                    dropZoneElements.length
-                ) {
-                    const isImageMatch =
-                        draggableItemElements.some(
-                            el =>
-                                !!el.querySelector(
-                                    '.option-image'
-                                ) ||
-                                el.dataset.type ===
-                                    'image' ||
-                                !!imageUrlFromElement(
-                                    el.querySelector(
-                                        '.option-image'
-                                    )
-                                )
+                    score +=
+                        Math.min(
+                            rect.width *
+                                rect.height /
+                                50000,
+                            10
                         );
 
-                    if (isImageMatch) {
-                        const draggableItems =
-                            draggableItemElements
-                                .map(
-                                    (el, i) => ({
-                                        id:
-                                            `IMAGEM ${i + 1}`,
-                                        imageUrl:
-                                            imageUrlFromElement(
-                                                el.querySelector(
-                                                    '.option-image'
-                                                ) || el
-                                            ),
-                                        element: el
-                                    })
-                                )
-                                .filter(
-                                    x => x.imageUrl
-                                );
-
-                        const dropZones =
-                            dropZoneElements
-                                .map(el => ({
-                                    text:
-                                        textFromElement(
-                                            el
-                                        ),
-                                    element: el
-                                }))
-                                .filter(
-                                    x => x.text
-                                );
-
-                        return {
-                            questionText,
-                            questionImageUrl,
-                            questionType:
-                                'match_image_to_text',
-                            draggableItems,
-                            dropZones
-                        };
-                    }
-
-                    const draggableItems =
-                        draggableItemElements
-                            .map(el => ({
-                                text:
-                                    textFromElement(el),
-                                element: el
-                            }))
-                            .filter(
-                                x => x.text
-                            );
-
-                    const dropZones =
-                        dropZoneElements
-                            .map(el => ({
-                                text:
-                                    textFromElement(el),
-                                element: el
-                            }))
-                            .filter(
-                                x => x.text
-                            );
-
-                    const questionType =
-                        /reorder|ordem|sequenc/i.test(
-                            questionText
+                    if (
+                        /question|prompt/i.test(
+                            String(
+                                element.className ||
+                                    ''
+                            )
                         )
-                            ? 'reorder'
-                            : 'match_order';
+                    ) {
+                        score +=
+                            5;
+                    }
 
                     return {
-                        questionText,
-                        questionImageUrl,
-                        questionType,
-                        draggableItems,
-                        dropZones
+                        element,
+                        text,
+                        score
                     };
                 }
-            }
+            );
 
-            const openEndedTextarea =
-                document.querySelector(
-                    'textarea[data-cy="open-ended-textarea"], textarea'
+        scored.sort(
+            (
+                a,
+                b
+            ) =>
+                b.score -
+                a.score
+        );
+
+        return (
+            scored[0]
+                ?.element ||
+            null
+        );
+    }
+
+    function extractOptions() {
+        const selectors = [
+            '[data-testid*="answer"]',
+            '[data-testid*="option"]',
+            '[class*="answer"]',
+            '[class*="Answer"]',
+            '[class*="option"]',
+            '[class*="Option"]',
+            'button'
+        ];
+
+        const candidates = [];
+
+        for (
+            const selector of
+            selectors
+        ) {
+            try {
+                candidates.push(
+                    ...document.querySelectorAll(
+                        selector
+                    )
+                );
+            } catch (_) {}
+        }
+
+        const unique =
+            uniqueElements(
+                candidates
+            ).filter(
+                isVisible
+            );
+
+        const options = [];
+
+        for (
+            const element of
+            unique
+        ) {
+            const text =
+                getText(
+                    element
                 );
 
             if (
-                openEndedTextarea &&
-                isVisible(openEndedTextarea)
+                text.length <
+                1 ||
+                text.length >
+                1000
             ) {
-                return {
-                    questionText,
-                    questionImageUrl,
-                    questionType:
-                        'open_ended',
-                    answerElement:
-                        openEndedTextarea
-                };
+                continue;
             }
 
-            const options =
-                extractOptions(container);
+            if (
+                options.some(
+                    item =>
+                        normalizeForFingerprint(
+                            item.text
+                        ) ===
+                        normalizeForFingerprint(
+                            text
+                        )
+                )
+            ) {
+                continue;
+            }
 
-            if (options.length > 0) {
-                const isMultipleChoice =
-                    options.some(
-                        el =>
-                            el.element?.classList?.contains(
-                                'is-msq'
-                            ) ||
-                            el.element?.getAttribute(
-                                'aria-multiselectable'
-                            ) === 'true'
+            options.push({
+                element,
+                text
+            });
+        }
+
+        return options.slice(
+            0,
+            12
+        );
+    }
+
+    function detectQuestionType(
+        questionText,
+        options
+    ) {
+        const text =
+            normalizeForFingerprint(
+                questionText
+            );
+
+        if (
+            !options.length
+        ) {
+            return 'open';
+        }
+
+        if (
+            options.length ===
+                2 &&
+            options.every(
+                option =>
+                    /^(true|false|verdadeiro|falso|sim|não|nao)$/i.test(
+                        normalizeText(
+                            option.text
+                        )
+                    )
+            )
+        ) {
+            return 'true_false';
+        }
+
+        if (
+            /\b(multiple|multiple choice|mais de uma|selecione todas|marque todas)\b/i.test(
+                text
+            )
+        ) {
+            return 'multiple_choice';
+        }
+
+        return 'multiple_choice';
+    }
+
+    function extractImageUrls() {
+        const urls =
+            new Set();
+
+        const images =
+            document.querySelectorAll(
+                'img'
+            );
+
+        for (
+            const img of
+            images
+        ) {
+            if (
+                !isVisible(
+                    img
+                )
+            ) {
+                continue;
+            }
+
+            const candidates = [
+                img.currentSrc,
+                img.src,
+                img.getAttribute(
+                    'data-src'
+                ),
+                img.getAttribute(
+                    'data-lazy-src'
+                )
+            ];
+
+            for (
+                const url of
+                candidates
+            ) {
+                if (
+                    typeof url ===
+                        'string' &&
+                    url.trim()
+                ) {
+                    urls.add(
+                        url.trim()
                     );
+                }
+            }
+        }
 
-                return {
-                    questionText,
-                    questionImageUrl,
-                    questionType:
-                        isMultipleChoice
-                            ? 'multiple_choice'
-                            : 'single_choice',
-                    options
-                };
+        return [
+            ...urls
+        ];
+    }
+
+    async function extrairDadosDaQuestao() {
+        const questionElements =
+            collectTextCandidates();
+
+        const questionElement =
+            chooseBestQuestionElement(
+                questionElements
+            );
+
+        let questionText =
+            getText(
+                questionElement
+            );
+
+        if (
+            questionText.length <
+            3
+        ) {
+            const bodyText =
+                getText(
+                    document.body
+                );
+
+            questionText =
+                bodyText.slice(
+                    0,
+                    CONFIG.maxQuestionLength
+                );
+        }
+
+        questionText =
+            questionText.slice(
+                0,
+                CONFIG.maxQuestionLength
+            );
+
+        const options =
+            extractOptions();
+
+        const imageUrls =
+            extractImageUrls();
+
+        const questionType =
+            detectQuestionType(
+                questionText,
+                options
+            );
+
+        return {
+            questionText,
+            options,
+            imageUrls,
+            questionType
+        };
+    }
+                );
+        }
+
+        if (data.allAvailableOptions) {
+            parts.push(
+                data.allAvailableOptions
+                    .map(normalizeForMatch)
+                    .join('|')
+            );
+        }
+
+        if (data.draggableOptions) {
+            parts.push(
+                data.draggableOptions
+                    .map(x => normalizeForMatch(x.text))
+                    .join('|')
+            );
+        }
+
+        if (data.draggableItems) {
+            parts.push(
+                data.draggableItems
+                    .map(x =>
+                        normalizeForMatch(
+                            x.text ||
+                            x.id ||
+                            x.imageUrl ||
+                            ''
+                        )
+                    )
+                    .join('|')
+            );
+        }
+
+        if (data.dropZones) {
+            parts.push(
+                data.dropZones
+                    .map(x =>
+                        normalizeForMatch(
+                            x.text ||
+                            x.prompt ||
+                            ''
+                        )
+                    )
+                    .join('|')
+            );
+        }
+
+        return parts.join('||');
+    }
+
+    function normalizeForMatch(text) {
+        return normalizeText(text)
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(
+                /[\u0300-\u036f]/g,
+                ''
+            )
+            .replace(
+                /[^\p{L}\p{N}\s]/gu,
+                ' '
+            )
+            .replace(
+                /\s+/g,
+                ' '
+            )
+            .trim();
+    }
+
+    // ============================================================
+    // CACHE PERSISTENTE
+    // ============================================================
+
+    const STORAGE_CACHE_KEY =
+        'nikolas_quizizz_v52_cache';
+
+    function loadPersistentCache() {
+        try {
+            const raw =
+                localStorage.getItem(
+                    STORAGE_CACHE_KEY
+                );
+
+            if (!raw) return;
+
+            const parsed =
+                JSON.parse(raw);
+
+            if (
+                !parsed ||
+                typeof parsed !==
+                    'object'
+            ) {
+                return;
             }
 
-            console.error(
-                '[Nikolas v51.1] Tipo de questão não reconhecido.',
-                {
-                    questionText,
-                    container
+            for (
+                const [key, value] of
+                Object.entries(parsed)
+            ) {
+                if (
+                    !value ||
+                    typeof value !==
+                        'object'
+                ) {
+                    continue;
                 }
+
+                if (
+                    Date.now() -
+                        Number(
+                            value.timestamp ||
+                                0
+                        ) >
+                    CONFIG.cacheTtl
+                ) {
+                    continue;
+                }
+
+                answerCache.set(
+                    key,
+                    value
+                );
+            }
+
+            log(
+                'Cache persistente carregado:',
+                answerCache.size
+            );
+        } catch (error) {
+            warn(
+                'Erro ao carregar cache:',
+                error
+            );
+        }
+    }
+
+    function savePersistentCache() {
+        try {
+            const object = {};
+
+            for (
+                const [key, value] of
+                answerCache.entries()
+            ) {
+                object[key] = value;
+            }
+
+            localStorage.setItem(
+                STORAGE_CACHE_KEY,
+                JSON.stringify(object)
+            );
+        } catch (error) {
+            warn(
+                'Erro ao salvar cache:',
+                error
+            );
+        }
+    }
+
+    function getAnswerFromCache(
+        fingerprint
+    ) {
+        if (!fingerprint) {
+            return null;
+        }
+
+        const memory =
+            answerCache.get(
+                fingerprint
+            );
+
+        if (memory) {
+            if (
+                Date.now() -
+                    memory.timestamp <=
+                CONFIG.cacheTtl
+            ) {
+                return memory.answer;
+            }
+
+            answerCache.delete(
+                fingerprint
+            );
+        }
+
+        try {
+            const raw =
+                localStorage.getItem(
+                    STORAGE_CACHE_KEY
+                );
+
+            if (!raw) {
+                return null;
+            }
+
+            const parsed =
+                JSON.parse(raw);
+
+            const entry =
+                parsed?.[
+                    fingerprint
+                ];
+
+            if (!entry) {
+                return null;
+            }
+
+            if (
+                Date.now() -
+                    Number(
+                        entry.timestamp ||
+                            0
+                    ) >
+                CONFIG.cacheTtl
+            ) {
+                delete parsed[
+                    fingerprint
+                ];
+
+                localStorage.setItem(
+                    STORAGE_CACHE_KEY,
+                    JSON.stringify(
+                        parsed
+                    )
+                );
+
+                return null;
+            }
+
+            answerCache.set(
+                fingerprint,
+                entry
+            );
+
+            return entry.answer;
+        } catch (error) {
+            warn(
+                'Erro ao consultar cache persistente:',
+                error
             );
 
             return null;
+        }
+    }
 
+    function saveAnswerToCache(
+        fingerprint,
+        answer
+    ) {
+        if (
+            !fingerprint ||
+            !answer
+        ) {
+            return;
+        }
+
+        const entry = {
+            answer,
+            timestamp:
+                Date.now()
+        };
+
+        answerCache.set(
+            fingerprint,
+            entry
+        );
+
+        if (
+            answerCache.size >
+            150
+        ) {
+            const first =
+                answerCache.keys()
+                    .next()
+                    .value;
+
+            answerCache.delete(
+                first
+            );
+        }
+
+        savePersistentCache();
+    }
+
+    // ============================================================
+    // IMAGENS
+    // ============================================================
+
+    function imageUrlFromElement(
+        element
+    ) {
+        if (!element) {
+            return null;
+        }
+
+        if (
+            element.tagName ===
+            'IMG'
+        ) {
+            return (
+                element.currentSrc ||
+                element.src ||
+                element.getAttribute(
+                    'data-src'
+                ) ||
+                null
+            );
+        }
+
+        const image =
+            element.querySelector(
+                'img'
+            );
+
+        if (image) {
+            return (
+                image.currentSrc ||
+                image.src ||
+                image.getAttribute(
+                    'data-src'
+                ) ||
+                null
+            );
+        }
+
+        const style =
+            element.getAttribute(
+                'style'
+            ) || '';
+
+        const match =
+            style.match(
+                /url\(["']?([^"')]+)["']?\)/i
+            );
+
+        return match?.[1] ||
+            null;
+    }
+
+    function findQuestionImage(
+        container
+    ) {
+        const roots =
+            uniqueElements([
+                container,
+                document
+            ]);
+
+        const candidates = [];
+
+        for (
+            const root of
+            roots
+        ) {
+            root.querySelectorAll?.(
+                'img, [style*="background-image" i]'
+            ).forEach(
+                element => {
+                    if (
+                        !isVisible(
+                            element
+                        )
+                    ) {
+                        return;
+                    }
+
+                    const url =
+                        imageUrlFromElement(
+                            element
+                        );
+
+                    if (!url) {
+                        return;
+                    }
+
+                    candidates.push({
+                        element,
+                        url
+                    });
+                }
+            );
+        }
+
+        if (!candidates.length) {
+            return null;
+        }
+
+        const scored =
+            candidates.map(
+                item => {
+                    const rect =
+                        item.element.getBoundingClientRect();
+
+                    let score =
+                        rect.width *
+                        rect.height;
+
+                    const alt =
+                        item.element.getAttribute(
+                            'alt'
+                        ) || '';
+
+                    if (
+                        /question|questao|questão|image|imagem/i.test(
+                            alt
+                        )
+                    ) {
+                        score +=
+                            100000;
+                    }
+
+                    return {
+                        ...item,
+                        score
+                    };
+                }
+            );
+
+        scored.sort(
+            (a, b) =>
+                b.score -
+                a.score
+        );
+
+        return scored[0] ||
+            null;
+    }
+
+    async function imageToDataUrl(
+        url
+    ) {
+        if (!url) {
+            return null;
+        }
+
+        try {
+            const response =
+                await fetch(
+                    url,
+                    {
+                        credentials:
+                            'include'
+                    }
+                );
+
+            if (!response.ok) {
+                return null;
+            }
+
+            const blob =
+                await response.blob();
+
+            if (
+                blob.size >
+                CONFIG.maxImageBytes
+            ) {
+                warn(
+                    'Imagem ignorada por tamanho:',
+                    blob.size
+                );
+
+                return null;
+            }
+
+            return await new Promise(
+                resolve => {
+                    const reader =
+                        new FileReader();
+
+                    reader.onload =
+                        () =>
+                            resolve(
+                                reader.result
+                            );
+
+                    reader.onerror =
+                        () =>
+                            resolve(
+                                null
+                            );
+
+                    reader.readAsDataURL(
+                        blob
+                    );
+                }
+            );
         } catch (error) {
-            console.error(
-                '[Nikolas v51.1] Erro ao extrair dados:',
+            warn(
+                'Falha ao converter imagem:',
                 error
             );
 
@@ -1078,490 +1136,1422 @@
     }
 
     // ============================================================
-    // IA — estrutura Gemini/OpenRouter preservada, com parsing robusto.
+    // PROMPT
     // ============================================================
-    async function obterRespostaDaIA(quizData) {
-        lastAiResponse = '';
 
-        let promptDeInstrucao = '';
-        let formattedOptions = '';
+    function buildPrompt(
+        data
+    ) {
+        const options =
+            data.options
+                ?.map(
+                    (option, index) =>
+                        `${String.fromCharCode(
+                            65 + index
+                        )}. ${option.text}`
+                )
+                .join('\n') ||
+            '';
 
-        switch (quizData.questionType) {
+        const draggable =
+            data.draggableOptions
+                ?.map(
+                    (option, index) =>
+                        `${index + 1}. ${option.text}`
+                )
+                .join('\n') ||
+            '';
 
-            case 'multi_dropdown':
-                promptDeInstrucao =
-                    `Esta é uma questão com múltiplas lacunas ([RESPOSTA X]). As opções disponíveis são um pool compartilhado e cada opção só pode ser usada uma vez. Determine a resposta correta para CADA placeholder. Responda com cada resposta em uma nova linha, no formato '[RESPOSTA X]: Resposta Correta'.`;
+        const draggableItems =
+            data.draggableItems
+                ?.map(
+                    (item, index) =>
+                        `${index + 1}. ${
+                            item.text ||
+                            item.id ||
+                            item.imageUrl ||
+                            ''
+                        }`
+                )
+                .join('\n') ||
+            '';
 
-                formattedOptions =
-                    `Pool de Opções Disponíveis: ${quizData.allAvailableOptions.join(', ')}`;
+        const dropZones =
+            data.dropZones
+                ?.map(
+                    (zone, index) =>
+                        `${index + 1}. ${
+                            zone.text ||
+                            zone.prompt ||
+                            ''
+                        }`
+                )
+                .join('\n') ||
+            '';
 
-                break;
+        let prompt = `
+Você é um assistente extremamente preciso para responder questões de quiz.
 
-            case 'match_image_to_text':
-                promptDeInstrucao =
-                    `Esta é uma questão de combinar imagens com seus textos correspondentes. Para cada imagem, forneça o par correto no formato EXATO: 'Texto da Opção -> ID da Imagem' (ex: 90° -> IMAGEM 3), um por linha.`;
+Analise a questão abaixo e determine a resposta correta.
 
-                formattedOptions =
-                    `Opções de Texto:\n${quizData.dropZones.map(x => `- "${x.text}"`).join('\n')}`;
+TIPO DA QUESTÃO:
+${data.questionType}
 
-                break;
+QUESTÃO:
+${data.questionText}
+`;
 
-            case 'match_order':
-                promptDeInstrucao =
-                    `Responda com os pares no formato EXATO: 'Texto do Local para Soltar -> Texto do Item para Arrastar', um por linha.`;
-
-                formattedOptions =
-                    `Itens:\n${quizData.draggableItems.map(x => `- "${x.text}"`).join('\n')}\n\nLocais:\n${quizData.dropZones.map(x => `- "${x.text}"`).join('\n')}`;
-
-                break;
-
-            case 'reorder':
-                promptDeInstrucao =
-                    `Forneça a ordem correta listando os textos dos itens, um por linha, do primeiro ao último.`;
-
-                formattedOptions =
-                    `Itens:\n${quizData.draggableItems.map(x => `- "${x.text}"`).join('\n')}`;
-
-                break;
-
-            case 'multi_drag_into_blank':
-                promptDeInstrucao =
-                    `Responda com os pares no formato EXATO: 'Sentença da pergunta -> Expressão da opção', um por linha.`;
-
-                formattedOptions =
-                    `Sentenças:\n${quizData.dropZones.map(x => `- "${x.prompt}"`).join('\n')}\n\nExpressões:\n${quizData.draggableOptions.map(x => `- "${x.text}"`).join('\n')}`;
-
-                break;
-
-            case 'equation':
-                promptDeInstrucao =
-                    `Resolva a equação ou inequação. Forneça apenas a expressão final simplificada.`;
-
-                formattedOptions =
-                    `EQUAÇÃO: "${quizData.questionText}"`;
-
-                break;
-
-            case 'dropdown':
-            case 'single_choice':
-                promptDeInstrucao =
-                    `Responda APENAS com o texto exato da ÚNICA alternativa correta.`;
-
-                formattedOptions =
-                    `OPÇÕES:\n${quizData.options.map(x => `- "${x.text}"`).join('\n')}`;
-
-                break;
-
-            case 'drag_into_blank':
-                promptDeInstrucao =
-                    `Responda APENAS com o texto da ÚNICA opção correta que preenche a lacuna.`;
-
-                formattedOptions =
-                    `OPÇÕES:\n${quizData.draggableOptions.map(x => `- "${x.text}"`).join('\n')}`;
-
-                break;
-
-            case 'multiple_choice':
-                promptDeInstrucao =
-                    `Responda APENAS com os textos exatos de TODAS as alternativas corretas, uma por linha.`;
-
-                formattedOptions =
-                    `OPÇÕES:\n${quizData.options.map(x => `- "${x.text}"`).join('\n')}`;
-
-                break;
-
-            case 'open_ended':
-                promptDeInstrucao =
-                    `Responda com a palavra ou frase curta que melhor responde à pergunta.`;
-
-                break;
+        if (options) {
+            prompt += `
+OPÇÕES:
+${options}
+`;
         }
 
-        let textPrompt =
-            `${promptDeInstrucao}\n\n---\nPERGUNTA: "${quizData.questionText}"\n---\n${formattedOptions}`;
+        if (data.allAvailableOptions?.length) {
+            prompt += `
+OPÇÕES DISPONÍVEIS:
+${data.allAvailableOptions
+    .map(
+        (x, i) =>
+            `${i + 1}. ${x}`
+    )
+    .join('\n')}
+`;
+        }
 
-        let base64Image =
-            quizData.questionImageUrl
-                ? await imageUrlToBase64(
-                    quizData.questionImageUrl
-                )
-                : null;
+        if (draggable) {
+            prompt += `
+ITENS PARA ARRASTAR:
+${draggable}
+`;
+        }
 
-        if (
-            currentAiProvider === 'deepseek' &&
-            (
-                base64Image ||
-                quizData.questionType ===
-                    'match_image_to_text'
-            )
-        ) {
-            console.warn(
-                '[Nikolas v51.1] DeepSeek não processa as imagens enviadas pelo script. A questão seguirá sem a imagem.'
+        if (draggableItems) {
+            prompt += `
+ITENS:
+${draggableItems}
+`;
+        }
+
+        if (dropZones) {
+            prompt += `
+DESTINOS:
+${dropZones}
+`;
+        }
+
+        prompt += `
+REGRAS:
+- Responda somente com a resposta final.
+- Não explique.
+- Se houver alternativas, indique a letra e o texto.
+- Em questões de associação, indique claramente cada correspondência.
+- Em questões de ordenar, indique a sequência correta.
+- Em questões abertas, escreva apenas a resposta que deve ser inserida.
+- Se houver imagem, use também as informações visuais.
+- Não invente informações.
+`;
+
+        return prompt.trim();
+    }
+
+    function parseAiResponse(
+        text
+    ) {
+        const clean =
+            normalizeText(
+                text
             );
 
-            base64Image = null;
+        if (!clean) {
+            return null;
+        }
+
+        return clean
+            .replace(
+                /^```[\w-]*\s*/i,
+                ''
+            )
+            .replace(
+                /\s*```$/i,
+                ''
+            )
+            .trim();
+    }
+
+    // ============================================================
+    // GEMINI
+    // ============================================================
+
+    function getGeminiKeys() {
+        return GEMINI_API_KEYS.filter(
+            isConfiguredKey
+        );
+    }
+
+    function getOpenRouterKeys() {
+        return OPENROUTER_API_KEYS.filter(
+            isConfiguredKey
+        );
+    }
+
+    function getCurrentGeminiKey() {
+        const keys =
+            getGeminiKeys();
+
+        if (!keys.length) {
+            return null;
+        }
+
+        return keys[
+            currentGeminiKeyIndex %
+                keys.length
+        ];
+    }
+
+    function rotateGeminiKey() {
+        const keys =
+            getGeminiKeys();
+
+        if (!keys.length) {
+            return;
+        }
+
+        currentGeminiKeyIndex =
+            (
+                currentGeminiKeyIndex +
+                1
+            ) %
+            keys.length;
+    }
+
+    function getCurrentOpenRouterKey() {
+        const keys =
+            getOpenRouterKeys();
+
+        if (!keys.length) {
+            return null;
+        }
+
+        return keys[
+            currentOpenRouterKeyIndex %
+                keys.length
+        ];
+    }
+
+    function rotateOpenRouterKey() {
+        const keys =
+            getOpenRouterKeys();
+
+        if (!keys.length) {
+            return;
+        }
+
+        currentOpenRouterKeyIndex =
+            (
+                currentOpenRouterKeyIndex +
+                1
+            ) %
+            keys.length;
+    }
+
+    async function askGemini(
+        prompt,
+        imageDataUrl = null
+    ) {
+        const keys =
+            getGeminiKeys();
+
+        if (!keys.length) {
+            throw new Error(
+                'Nenhuma chave Gemini configurada.'
+            );
+        }
+
+        let lastError =
+            null;
+
+        for (
+            let attempt = 0;
+            attempt <
+                keys.length;
+            attempt++
+        ) {
+            const key =
+                getCurrentGeminiKey();
+
+            if (!key) {
+                break;
+            }
+
+            const parts = [
+                {
+                    text:
+                        prompt
+                }
+            ];
 
             if (
-                quizData.questionType ===
-                'match_image_to_text'
+                imageDataUrl
             ) {
-                quizData.draggableItems =
-                    quizData.draggableItems.map(
-                        item => ({
-                            ...item,
-                            text: item.id
-                        })
+                const match =
+                    imageDataUrl.match(
+                        /^data:([^;]+);base64,(.+)$/s
                     );
 
-                textPrompt =
-                    `Responda com os pares no formato EXATO: 'Texto do Local para Soltar -> ID da Imagem'.\n\nPERGUNTA: "${quizData.questionText}"\n\nItens:\n${quizData.draggableItems.map(x => `- "${x.text}"`).join('\n')}\n\nLocais:\n${quizData.dropZones.map(x => `- "${x.text}"`).join('\n')}`;
-            }
-        }
-
-        let aiResponseText = null;
-
-        if (
-            currentAiProvider === 'gemini'
-        ) {
-            for (
-                let i = 0;
-                i < GEMINI_API_KEYS.length;
-                i++
-            ) {
-                const currentKey =
-                    GEMINI_API_KEYS[
-                        currentApiKeyIndex
-                    ];
-
-                if (
-                    !currentKey ||
-                    currentKey.includes(
-                        'CHAVE_'
-                    ) ||
-                    currentKey.includes(
-                        'SUA_'
-                    ) ||
-                    currentKey.length < 30
-                ) {
-                    currentApiKeyIndex =
-                        (
-                            currentApiKeyIndex + 1
-                        ) %
-                        GEMINI_API_KEYS.length;
-
-                    continue;
-                }
-
-                const API_URL =
-                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentKey}`;
-
-                const promptParts = [
-                    {
-                        text: textPrompt
-                    }
-                ];
-
-                if (base64Image) {
-                    const parsed =
-                        parseDataUrl(
-                            base64Image
-                        );
-
-                    if (parsed) {
-                        promptParts.push({
-                            inline_data: {
-                                mime_type:
-                                    parsed.mimeType,
-                                data:
-                                    parsed.data
-                            }
-                        });
-                    }
-                }
-
-                if (
-                    quizData.questionType ===
-                    'match_image_to_text'
-                ) {
-                    promptParts.push({
-                        text:
-                            '\n\nIMAGENS (Itens para Arrastar):\n'
+                if (match) {
+                    parts.push({
+                        inline_data: {
+                            mime_type:
+                                match[1],
+                            data:
+                                match[2]
+                        }
                     });
-
-                    for (
-                        const item of
-                        quizData.draggableItems
-                    ) {
-                        const base64 =
-                            await imageUrlToBase64(
-                                item.imageUrl
-                            );
-
-                        const parsed =
-                            base64
-                                ? parseDataUrl(
-                                    base64
-                                )
-                                : null;
-
-                        if (parsed) {
-                            promptParts.push({
-                                inline_data: {
-                                    mime_type:
-                                        parsed.mimeType,
-                                    data:
-                                        parsed.data
-                                }
-                            });
-
-                            promptParts.push({
-                                text:
-                                    `- ${item.id}`
-                            });
-                        }
-                    }
                 }
+            }
 
-                try {
-                    const response =
-                        await fetchWithTimeout(
-                            API_URL,
-                            {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type':
-                                        'application/json'
-                                },
-                                body:
-                                    JSON.stringify({
-                                        contents: [{
-                                            parts:
-                                                promptParts
-                                        }]
-                                    })
-                            }
+            try {
+                const response =
+                    await fetchWithTimeout(
+                        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+                            CONFIG.geminiModel
+                        )}:generateContent?key=${encodeURIComponent(
+                            key
+                        )}`,
+                        {
+                            method:
+                                'POST',
+                            headers: {
+                                'Content-Type':
+                                    'application/json'
+                            },
+                            body:
+                                JSON.stringify({
+                                    contents: [
+                                        {
+                                            parts
+                                        }
+                                    ],
+                                    generationConfig: {
+                                        temperature:
+                                            0,
+                                        maxOutputTokens:
+                                            300
+                                    }
+                                })
+                        },
+                        CONFIG.requestTimeout
+                    );
+
+                if (
+                    response.ok
+                ) {
+                    const json =
+                        await response.json();
+
+                    const text =
+                        json?.candidates?.[0]
+                            ?.content?.parts
+                            ?.map(
+                                part =>
+                                    part.text ||
+                                    ''
+                            )
+                            .join(' ') ||
+                        '';
+
+                    const answer =
+                        parseAiResponse(
+                            text
                         );
 
-                    if (response.ok) {
-                        const data =
-                            await response.json();
-
-                        aiResponseText =
-                            extractGeminiText(
-                                data
-                            );
-
-                        if (aiResponseText) {
-                            break;
-                        }
-
-                        console.warn(
-                            '[Nikolas v51.1] Gemini respondeu sem texto utilizável.',
-                            data
-                        );
-
-                    } else {
-                        const errorData =
-                            await safeJson(
-                                response
-                            );
-
-                        console.warn(
-                            `[Nikolas v51.1] Gemini #${currentApiKeyIndex + 1}: ${errorData?.error?.message || `HTTP ${response.status}`}`
-                        );
+                    if (answer) {
+                        return answer;
                     }
 
-                } catch (error) {
-                    console.warn(
-                        `[Nikolas v51.1] Erro Gemini #${currentApiKeyIndex + 1}: ${error.message}`
+                    throw new Error(
+                        'Gemini retornou resposta vazia.'
                     );
                 }
 
-                currentApiKeyIndex =
-                    (
-                        currentApiKeyIndex + 1
-                    ) %
-                    GEMINI_API_KEYS.length;
-            }
+                const body =
+                    await safeResponseText(
+                        response
+                    );
 
-        } else {
-            for (
-                let i = 0;
-                i < OPENROUTER_API_KEYS.length;
-                i++
-            ) {
-                const currentKey =
-                    OPENROUTER_API_KEYS[
-                        currentOpenRouterKeyIndex
-                    ];
+                const error =
+                    new Error(
+                        `Gemini HTTP ${response.status}: ${body}`
+                    );
+
+                error.status =
+                    response.status;
+
+                throw error;
+            } catch (error) {
+                lastError =
+                    error;
+
+                warn(
+                    'Erro Gemini:',
+                    error
+                );
 
                 if (
-                    !currentKey ||
-                    currentKey.includes(
-                        'SUA_'
-                    ) ||
-                    currentKey.length < 30
+                    isRotatableStatus(
+                        error?.status
+                    )
                 ) {
-                    currentOpenRouterKeyIndex =
-                        (
-                            currentOpenRouterKeyIndex + 1
-                        ) %
-                        OPENROUTER_API_KEYS.length;
-
+                    rotateGeminiKey();
                     continue;
                 }
 
-                const API_URL =
-                    'https://openrouter.ai/api/v1/chat/completions';
-
-                try {
-                    const response =
-                        await fetchWithTimeout(
-                            API_URL,
-                            {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type':
-                                        'application/json',
-                                    'Authorization':
-                                        `Bearer ${currentKey}`,
-                                    'HTTP-Referer':
-                                        'https://github.com/Nikolas0508',
-                                    'X-Title':
-                                        'Nikolas Quizizz'
-                                },
-                                body:
-                                    JSON.stringify({
-                                        model:
-                                            DEEPSEEK_MODEL_NAME,
-                                        messages: [{
-                                            role:
-                                                'user',
-                                            content:
-                                                textPrompt
-                                        }],
-                                        max_tokens:
-                                            1024
-                                    })
-                            }
-                        );
-
-                    if (response.ok) {
-                        const data =
-                            await response.json();
-
-                        aiResponseText =
-                            data?.choices
-                                ?.map(
-                                    x =>
-                                        x?.message
-                                            ?.content
-                                )
-                                .filter(Boolean)
-                                .join('\n') ||
-                            null;
-
-                        if (aiResponseText) {
-                            break;
-                        }
-
-                    } else {
-                        const errorData =
-                            await safeJson(
-                                response
-                            );
-
-                        console.warn(
-                            `[Nikolas v51.1] OpenRouter #${currentOpenRouterKeyIndex + 1}: ${errorData?.error?.message || `HTTP ${response.status}`}`
-                        );
-                    }
-
-                } catch (error) {
-                    console.warn(
-                        `[Nikolas v51.1] Erro OpenRouter #${currentOpenRouterKeyIndex + 1}: ${error.message}`
-                    );
-                }
-
-                currentOpenRouterKeyIndex =
-                    (
-                        currentOpenRouterKeyIndex + 1
-                    ) %
-                    OPENROUTER_API_KEYS.length;
+                throw error;
             }
         }
 
-        if (!aiResponseText) {
-            throw new Error(
-                `A IA não retornou uma resposta utilizável (${currentAiProvider}).`
+        throw (
+            lastError ||
+            new Error(
+                'Falha ao consultar Gemini.'
+            )
+        );
+    }
+        }
+
+        if (data.allAvailableOptions) {
+            parts.push(
+                data.allAvailableOptions
+                    .map(normalizeForMatch)
+                    .join('|')
             );
         }
 
-        lastAiResponse =
-            aiResponseText.trim();
+        if (data.draggableOptions) {
+            parts.push(
+                data.draggableOptions
+                    .map(x => normalizeForMatch(x.text))
+                    .join('|')
+            );
+        }
 
-        console.log(
-            '[Nikolas v51.1] Resposta bruta da IA:',
-            lastAiResponse
-        );
+        if (data.draggableItems) {
+            parts.push(
+                data.draggableItems
+                    .map(x =>
+                        normalizeForMatch(
+                            x.text ||
+                            x.id ||
+                            x.imageUrl ||
+                            ''
+                        )
+                    )
+                    .join('|')
+            );
+        }
 
-        return lastAiResponse;
+        if (data.dropZones) {
+            parts.push(
+                data.dropZones
+                    .map(x =>
+                        normalizeForMatch(
+                            x.text ||
+                            x.prompt ||
+                            ''
+                        )
+                    )
+                    .join('|')
+            );
+        }
+
+        return parts.join('||');
     }
 
-    function extractGeminiText(data) {
-        const parts =
-            data?.candidates?.flatMap(
-                c =>
-                    c?.content?.parts || []
-            ) || [];
-
-        return parts
-            .map(p => p?.text)
-            .filter(Boolean)
-            .join('\n')
-            .trim() || null;
+    function normalizeForMatch(text) {
+        return normalizeText(text)
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(
+                /[\u0300-\u036f]/g,
+                ''
+            )
+            .replace(
+                /[^\p{L}\p{N}\s]/gu,
+                ' '
+            )
+            .replace(
+                /\s+/g,
+                ' '
+            )
+            .trim();
     }
 
-    async function safeJson(response) {
+    // ============================================================
+    // CACHE PERSISTENTE
+    // ============================================================
+
+    const STORAGE_CACHE_KEY =
+        'nikolas_quizizz_v52_cache';
+
+    function loadPersistentCache() {
         try {
-            return await response.json();
-        } catch (_) {
+            const raw =
+                localStorage.getItem(
+                    STORAGE_CACHE_KEY
+                );
+
+            if (!raw) return;
+
+            const parsed =
+                JSON.parse(raw);
+
+            if (
+                !parsed ||
+                typeof parsed !==
+                    'object'
+            ) {
+                return;
+            }
+
+            for (
+                const [key, value] of
+                Object.entries(parsed)
+            ) {
+                if (
+                    !value ||
+                    typeof value !==
+                        'object'
+                ) {
+                    continue;
+                }
+
+                if (
+                    Date.now() -
+                        Number(
+                            value.timestamp ||
+                                0
+                        ) >
+                    CONFIG.cacheTtl
+                ) {
+                    continue;
+                }
+
+                answerCache.set(
+                    key,
+                    value
+                );
+            }
+
+            log(
+                'Cache persistente carregado:',
+                answerCache.size
+            );
+        } catch (error) {
+            warn(
+                'Erro ao carregar cache:',
+                error
+            );
+        }
+    }
+
+    function savePersistentCache() {
+        try {
+            const object = {};
+
+            for (
+                const [key, value] of
+                answerCache.entries()
+            ) {
+                object[key] = value;
+            }
+
+            localStorage.setItem(
+                STORAGE_CACHE_KEY,
+                JSON.stringify(object)
+            );
+        } catch (error) {
+            warn(
+                'Erro ao salvar cache:',
+                error
+            );
+        }
+    }
+
+    function getAnswerFromCache(
+        fingerprint
+    ) {
+        if (!fingerprint) {
+            return null;
+        }
+
+        const memory =
+            answerCache.get(
+                fingerprint
+            );
+
+        if (memory) {
+            if (
+                Date.now() -
+                    memory.timestamp <=
+                CONFIG.cacheTtl
+            ) {
+                return memory.answer;
+            }
+
+            answerCache.delete(
+                fingerprint
+            );
+        }
+
+        try {
+            const raw =
+                localStorage.getItem(
+                    STORAGE_CACHE_KEY
+                );
+
+            if (!raw) {
+                return null;
+            }
+
+            const parsed =
+                JSON.parse(raw);
+
+            const entry =
+                parsed?.[
+                    fingerprint
+                ];
+
+            if (!entry) {
+                return null;
+            }
+
+            if (
+                Date.now() -
+                    Number(
+                        entry.timestamp ||
+                            0
+                    ) >
+                CONFIG.cacheTtl
+            ) {
+                delete parsed[
+                    fingerprint
+                ];
+
+                localStorage.setItem(
+                    STORAGE_CACHE_KEY,
+                    JSON.stringify(
+                        parsed
+                    )
+                );
+
+                return null;
+            }
+
+            answerCache.set(
+                fingerprint,
+                entry
+            );
+
+            return entry.answer;
+        } catch (error) {
+            warn(
+                'Erro ao consultar cache persistente:',
+                error
+            );
+
             return null;
         }
     }
 
-    function parseDataUrl(value) {
-        const match =
-            String(value || '').match(
-                /^data:([^;,]+);base64,(.+)$/s
-            );
+    function saveAnswerToCache(
+        fingerprint,
+        answer
+    ) {
+        if (
+            !fingerprint ||
+            !answer
+        ) {
+            return;
+        }
 
-        if (!match) return null;
-
-        const allowed = [
-            'image/jpeg',
-            'image/png',
-            'image/webp',
-            'image/gif'
-        ];
-
-        return {
-            mimeType:
-                allowed.includes(match[1])
-                    ? match[1]
-                    : 'image/jpeg',
-            data: match[2]
+        const entry = {
+            answer,
+            timestamp:
+                Date.now()
         };
+
+        answerCache.set(
+            fingerprint,
+            entry
+        );
+
+        if (
+            answerCache.size >
+            150
+        ) {
+            const first =
+                answerCache.keys()
+                    .next()
+                    .value;
+
+            answerCache.delete(
+                first
+            );
+        }
+
+        savePersistentCache();
     }
-        // ============================================================
-    // RESULTADO — somente exibe. Não seleciona nem envia respostas.
+
     // ============================================================
-    function showResult(answer, quizData) {
-        const old =
-            document.getElementById(
-                'nikolas-result-toast'
+    // IMAGENS
+    // ============================================================
+
+    function imageUrlFromElement(
+        element
+    ) {
+        if (!element) {
+            return null;
+        }
+
+        if (
+            element.tagName ===
+            'IMG'
+        ) {
+            return (
+                element.currentSrc ||
+                element.src ||
+                element.getAttribute(
+                    'data-src'
+                ) ||
+                null
+            );
+        }
+
+        const image =
+            element.querySelector(
+                'img'
             );
 
-        if (old) old.remove();
+        if (image) {
+            return (
+                image.currentSrc ||
+                image.src ||
+                image.getAttribute(
+                    'data-src'
+                ) ||
+                null
+            );
+        }
+
+        const style =
+            element.getAttribute(
+                'style'
+            ) || '';
+
+        const match =
+            style.match(
+                /url\(["']?([^"')]+)["']?\)/i
+            );
+
+        return match?.[1] ||
+            null;
+    }
+
+    function findQuestionImage(
+        container
+    ) {
+        const roots =
+            uniqueElements([
+                container,
+                document
+            ]);
+
+        const candidates = [];
+
+        for (
+            const root of
+            roots
+        ) {
+            root.querySelectorAll?.(
+                'img, [style*="background-image" i]'
+            ).forEach(
+                element => {
+                    if (
+                        !isVisible(
+                            element
+                        )
+                    ) {
+                        return;
+                    }
+
+                    const url =
+                        imageUrlFromElement(
+                            element
+                        );
+
+                    if (!url) {
+                        return;
+                    }
+
+                    candidates.push({
+                        element,
+                        url
+                    });
+                }
+            );
+        }
+
+        if (!candidates.length) {
+            return null;
+        }
+
+        const scored =
+            candidates.map(
+                item => {
+                    const rect =
+                        item.element.getBoundingClientRect();
+
+                    let score =
+                        rect.width *
+                        rect.height;
+
+                    const alt =
+                        item.element.getAttribute(
+                            'alt'
+                        ) || '';
+
+                    if (
+                        /question|questao|questão|image|imagem/i.test(
+                            alt
+                        )
+                    ) {
+                        score +=
+                            100000;
+                    }
+
+                    return {
+                        ...item,
+                        score
+                    };
+                }
+            );
+
+        scored.sort(
+            (a, b) =>
+                b.score -
+                a.score
+        );
+
+        return scored[0] ||
+            null;
+    }
+
+    async function imageToDataUrl(
+        url
+    ) {
+        if (!url) {
+            return null;
+        }
+
+        try {
+            const response =
+                await fetch(
+                    url,
+                    {
+                        credentials:
+                            'include'
+                    }
+                );
+
+            if (!response.ok) {
+                return null;
+            }
+
+            const blob =
+                await response.blob();
+
+            if (
+                blob.size >
+                CONFIG.maxImageBytes
+            ) {
+                warn(
+                    'Imagem ignorada por tamanho:',
+                    blob.size
+                );
+
+                return null;
+            }
+
+            return await new Promise(
+                resolve => {
+                    const reader =
+                        new FileReader();
+
+                    reader.onload =
+                        () =>
+                            resolve(
+                                reader.result
+                            );
+
+                    reader.onerror =
+                        () =>
+                            resolve(
+                                null
+                            );
+
+                    reader.readAsDataURL(
+                        blob
+                    );
+                }
+            );
+        } catch (error) {
+            warn(
+                'Falha ao converter imagem:',
+                error
+            );
+
+            return null;
+        }
+    }
+
+    // ============================================================
+    // PROMPT
+    // ============================================================
+
+    function buildPrompt(
+        data
+    ) {
+        const options =
+            data.options
+                ?.map(
+                    (option, index) =>
+                        `${String.fromCharCode(
+                            65 + index
+                        )}. ${option.text}`
+                )
+                .join('\n') ||
+            '';
+
+        const draggable =
+            data.draggableOptions
+                ?.map(
+                    (option, index) =>
+                        `${index + 1}. ${option.text}`
+                )
+                .join('\n') ||
+            '';
+
+        const draggableItems =
+            data.draggableItems
+                ?.map(
+                    (item, index) =>
+                        `${index + 1}. ${
+                            item.text ||
+                            item.id ||
+                            item.imageUrl ||
+                            ''
+                        }`
+                )
+                .join('\n') ||
+            '';
+
+        const dropZones =
+            data.dropZones
+                ?.map(
+                    (zone, index) =>
+                        `${index + 1}. ${
+                            zone.text ||
+                            zone.prompt ||
+                            ''
+                        }`
+                )
+                .join('\n') ||
+            '';
+
+        let prompt = `
+Você é um assistente extremamente preciso para responder questões de quiz.
+
+Analise a questão abaixo e determine a resposta correta.
+
+TIPO DA QUESTÃO:
+${data.questionType}
+
+QUESTÃO:
+${data.questionText}
+`;
+
+        if (options) {
+            prompt += `
+OPÇÕES:
+${options}
+`;
+        }
+
+        if (data.allAvailableOptions?.length) {
+            prompt += `
+OPÇÕES DISPONÍVEIS:
+${data.allAvailableOptions
+    .map(
+        (x, i) =>
+            `${i + 1}. ${x}`
+    )
+    .join('\n')}
+`;
+        }
+
+        if (draggable) {
+            prompt += `
+ITENS PARA ARRASTAR:
+${draggable}
+`;
+        }
+
+        if (draggableItems) {
+            prompt += `
+ITENS:
+${draggableItems}
+`;
+        }
+
+        if (dropZones) {
+            prompt += `
+DESTINOS:
+${dropZones}
+`;
+        }
+
+        prompt += `
+REGRAS:
+- Responda somente com a resposta final.
+- Não explique.
+- Se houver alternativas, indique a letra e o texto.
+- Em questões de associação, indique claramente cada correspondência.
+- Em questões de ordenar, indique a sequência correta.
+- Em questões abertas, escreva apenas a resposta que deve ser inserida.
+- Se houver imagem, use também as informações visuais.
+- Não invente informações.
+`;
+
+        return prompt.trim();
+    }
+
+    function parseAiResponse(
+        text
+    ) {
+        const clean =
+            normalizeText(
+                text
+            );
+
+        if (!clean) {
+            return null;
+        }
+
+        return clean
+            .replace(
+                /^```[\w-]*\s*/i,
+                ''
+            )
+            .replace(
+                /\s*```$/i,
+                ''
+            )
+            .trim();
+    }
+
+    // ============================================================
+    // GEMINI
+    // ============================================================
+
+    function getGeminiKeys() {
+        return GEMINI_API_KEYS.filter(
+            isConfiguredKey
+        );
+    }
+
+    function getOpenRouterKeys() {
+        return OPENROUTER_API_KEYS.filter(
+            isConfiguredKey
+        );
+    }
+
+    function getCurrentGeminiKey() {
+        const keys =
+            getGeminiKeys();
+
+        if (!keys.length) {
+            return null;
+        }
+
+        return keys[
+            currentGeminiKeyIndex %
+                keys.length
+        ];
+    }
+
+    function rotateGeminiKey() {
+        const keys =
+            getGeminiKeys();
+
+        if (!keys.length) {
+            return;
+        }
+
+        currentGeminiKeyIndex =
+            (
+                currentGeminiKeyIndex +
+                1
+            ) %
+            keys.length;
+    }
+
+    function getCurrentOpenRouterKey() {
+        const keys =
+            getOpenRouterKeys();
+
+        if (!keys.length) {
+            return null;
+        }
+
+        return keys[
+            currentOpenRouterKeyIndex %
+                keys.length
+        ];
+    }
+
+    function rotateOpenRouterKey() {
+        const keys =
+            getOpenRouterKeys();
+
+        if (!keys.length) {
+            return;
+        }
+
+        currentOpenRouterKeyIndex =
+            (
+                currentOpenRouterKeyIndex +
+                1
+            ) %
+            keys.length;
+    }
+
+    async function askGemini(
+        prompt,
+        imageDataUrl = null
+    ) {
+        const keys =
+            getGeminiKeys();
+
+        if (!keys.length) {
+            throw new Error(
+                'Nenhuma chave Gemini configurada.'
+            );
+        }
+
+        let lastError =
+            null;
+
+        for (
+            let attempt = 0;
+            attempt <
+                keys.length;
+            attempt++
+        ) {
+            const key =
+                getCurrentGeminiKey();
+
+            if (!key) {
+                break;
+            }
+
+            const parts = [
+                {
+                    text:
+                        prompt
+                }
+            ];
+
+            if (
+                imageDataUrl
+            ) {
+                const match =
+                    imageDataUrl.match(
+                        /^data:([^;]+);base64,(.+)$/s
+                    );
+
+                if (match) {
+                    parts.push({
+                        inline_data: {
+                            mime_type:
+                                match[1],
+                            data:
+                                match[2]
+                        }
+                    });
+                }
+            }
+
+            try {
+                const response =
+                    await fetchWithTimeout(
+                        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+                            CONFIG.geminiModel
+                        )}:generateContent?key=${encodeURIComponent(
+                            key
+                        )}`,
+                        {
+                            method:
+                                'POST',
+                            headers: {
+                                'Content-Type':
+                                    'application/json'
+                            },
+                            body:
+                                JSON.stringify({
+                                    contents: [
+                                        {
+                                            parts
+                                        }
+                                    ],
+                                    generationConfig: {
+                                        temperature:
+                                            0,
+                                        maxOutputTokens:
+                                            300
+                                    }
+                                })
+                        },
+                        CONFIG.requestTimeout
+                    );
+
+                if (
+                    response.ok
+                ) {
+                    const json =
+                        await response.json();
+
+                    const text =
+                        json?.candidates?.[0]
+                            ?.content?.parts
+                            ?.map(
+                                part =>
+                                    part.text ||
+                                    ''
+                            )
+                            .join(' ') ||
+                        '';
+
+                    const answer =
+                        parseAiResponse(
+                            text
+                        );
+
+                    if (answer) {
+                        return answer;
+                    }
+
+                    throw new Error(
+                        'Gemini retornou resposta vazia.'
+                    );
+                }
+
+                const body =
+                    await safeResponseText(
+                        response
+                    );
+
+                const error =
+                    new Error(
+                        `Gemini HTTP ${response.status}: ${body}`
+                    );
+
+                error.status =
+                    response.status;
+
+                throw error;
+            } catch (error) {
+                lastError =
+                    error;
+
+                warn(
+                    'Erro Gemini:',
+                    error
+                );
+
+                if (
+                    isRotatableStatus(
+                        error?.status
+                    )
+                ) {
+                    rotateGeminiKey();
+                    continue;
+                }
+
+                throw error;
+            }
+        }
+
+        throw (
+            lastError ||
+            new Error(
+                'Falha ao consultar Gemini.'
+            )
+        );
+    }
+                    `OpenRouter chave ${index + 1} falhou:`,
+                    message
+                );
+            } catch (error) {
+                lastError = error;
+                log(
+                    `OpenRouter chave ${index + 1}:`,
+                    error.message
+                );
+            }
+        }
+
+        throw (
+            lastError ||
+            new Error(
+                'Nenhuma chave OpenRouter utilizável.'
+            )
+        );
+    }
+
+    // ============================================================
+    // CONSULTA À IA
+    // ============================================================
+
+    async function getAiAnswer(data) {
+        const fingerprint =
+            buildFingerprint(data);
+
+        const cached =
+            cacheGet(fingerprint);
+
+        if (cached) {
+            log('Resposta encontrada no cache.');
+            return cached;
+        }
+
+        const prompt =
+            buildPrompt(data);
+
+        let imageDataUrl = null;
+
+        // Só envia imagem para Gemini.
+        if (
+            CONFIG.provider === 'gemini' &&
+            data.questionImageUrl
+        ) {
+            imageDataUrl =
+                await imageUrlToBase64(
+                    data.questionImageUrl
+                );
+        }
+
+        let answer;
+
+        if (
+            CONFIG.provider === 'gemini'
+        ) {
+            answer =
+                await requestGemini(
+                    prompt,
+                    imageDataUrl
+                );
+        } else if (
+            CONFIG.provider === 'openrouter'
+        ) {
+            answer =
+                await requestOpenRouter(
+                    prompt
+                );
+        } else {
+            throw new Error(
+                `Provider inválido: ${CONFIG.provider}`
+            );
+        }
+
+        answer =
+            cleanAiAnswer(answer);
+
+        if (!answer) {
+            throw new Error(
+                'A IA retornou uma resposta vazia.'
+            );
+        }
+
+        cacheSet(
+            fingerprint,
+            answer
+        );
+
+        return answer;
+    }
+
+    function cleanAiAnswer(answer) {
+        return String(answer || '')
+            .replace(/^```(?:text|plaintext)?/i, '')
+            .replace(/```$/i, '')
+            .replace(/^Resposta:\s*/i, '')
+            .trim();
+    }
+
+    // ============================================================
+    // INTERFACE
+    // ============================================================
+
+    function removeElement(id) {
+        document.getElementById(id)?.remove();
+    }
+
+    function showStatus(text, error = false) {
+        removeElement('nikolas-status');
+
+        const el =
+            document.createElement('div');
+
+        el.id = 'nikolas-status';
+
+        Object.assign(
+            el.style,
+            {
+                position: 'fixed',
+                top: '18px',
+                left: '50%',
+                transform:
+                    'translateX(-50%)',
+                zIndex: '2147483647',
+                padding: '9px 15px',
+                borderRadius: '999px',
+                background:
+                    'rgba(10,14,18,.94)',
+                border:
+                    `1px solid ${error ? '#ff3b6b' : '#00ffff'}`,
+                color: '#fff',
+                font:
+                    '600 12px/1.2 system-ui,sans-serif',
+                boxShadow:
+                    '0 0 20px rgba(0,255,255,.12)',
+                pointerEvents: 'none'
+            }
+        );
+
+        el.textContent = text;
+
+        document.body.appendChild(el);
+
+        setTimeout(
+            () => el.remove(),
+            2200
+        );
+    }
+
+    function showResult(answer, data, fromCache = false) {
+        removeElement('nikolas-result-toast');
 
         const box =
             document.createElement('div');
@@ -1577,33 +2567,82 @@
                 bottom: '20px',
                 zIndex: '2147483647',
                 width:
-                    'min(520px, calc(100vw - 40px))',
-                maxHeight: '45vh',
+                    'min(560px, calc(100vw - 40px))',
+                maxHeight: '50vh',
                 overflow: 'auto',
-                padding: '14px 16px',
-                borderRadius: '14px',
+                padding: '16px 18px',
+                borderRadius: '16px',
                 color: '#fff',
                 background:
-                    'rgba(12,16,22,.94)',
+                    'rgba(9,13,18,.96)',
                 border:
-                    '1px solid rgba(0,255,255,.45)',
+                    '1px solid rgba(0,255,255,.48)',
                 boxShadow:
-                    '0 0 25px rgba(0,255,255,.18)',
+                    '0 0 30px rgba(0,255,255,.16)',
                 font:
-                    '14px/1.45 system-ui,sans-serif',
+                    '14px/1.5 system-ui,sans-serif',
                 whiteSpace: 'pre-wrap',
-                backdropFilter: 'blur(10px)'
+                backdropFilter:
+                    'blur(12px)'
+            }
+        );
+
+        const header =
+            document.createElement('div');
+
+        Object.assign(
+            header.style,
+            {
+                display: 'flex',
+                justifyContent:
+                    'space-between',
+                gap: '12px',
+                alignItems: 'center',
+                marginBottom: '10px'
             }
         );
 
         const title =
+            document.createElement('strong');
+
+        title.textContent =
+            'Nikolas Scripts — Resposta da IA';
+
+        title.style.color =
+            '#66ffff';
+
+        const badge =
+            document.createElement('span');
+
+        badge.textContent =
+            fromCache ? 'CACHE' : 'IA';
+
+        Object.assign(
+            badge.style,
+            {
+                fontSize: '10px',
+                fontWeight: '800',
+                padding: '3px 7px',
+                borderRadius: '999px',
+                border:
+                    '1px solid rgba(0,255,255,.4)'
+            }
+        );
+
+        header.append(
+            title,
+            badge
+        );
+
+        const type =
             document.createElement('div');
 
-        title.textContent = 'Nikolas Scripts - Resposta da IA';
+        type.textContent =
+            `Tipo: ${data.questionType}`;
 
-        title.style.fontWeight = '700';
-        title.style.marginBottom = '8px';
-        title.style.color = '#66ffff';
+        type.style.opacity = '.65';
+        type.style.fontSize = '11px';
+        type.style.marginBottom = '8px';
 
         const body =
             document.createElement('div');
@@ -1611,7 +2650,8 @@
         body.textContent = answer;
 
         box.append(
-            title,
+            header,
+            type,
             body
         );
 
@@ -1619,45 +2659,20 @@
 
         setTimeout(
             () => box.remove(),
-            12000
+            15000
         );
     }
 
-    async function performAction(
-        aiAnswerText,
-        quizData
-    ) {
-        if (!aiAnswerText) return;
-
-        console.log(
-            '[Nikolas v51.1] Resultado pronto:',
-            {
-                type:
-                    quizData.questionType,
-                answer:
-                    aiAnswerText
-            }
-        );
-
-        showResult(
-            aiAnswerText,
-            quizData
-        );
-    }
-
-    // ============================================================
-    // CURSOR / STATUS
-    // ============================================================
     function setCursorState(state) {
-        document.documentElement.dataset.nikolasCursor =
-            state;
-
         const old =
             document.getElementById(
                 'nikolas-cursor-style'
             );
 
-        if (old) old.remove();
+        old?.remove();
+
+        document.documentElement.dataset
+            .nikolasCursor = state;
 
         if (state === 'normal') return;
 
@@ -1680,510 +2695,230 @@
         document.head.appendChild(style);
     }
 
-    function showStatus(
-        text,
-        error = false
-    ) {
-        const old =
-            document.getElementById(
-                'nikolas-status'
-            );
-
-        if (old) old.remove();
-
-        const el =
-            document.createElement('div');
-
-        el.id =
-            'nikolas-status';
-
-        el.textContent =
-            text;
-
-        Object.assign(
-            el.style,
-            {
-                position: 'fixed',
-                left: '50%',
-                top: '18px',
-                transform:
-                    'translateX(-50%)',
-                zIndex:
-                    '2147483647',
-                padding:
-                    '8px 14px',
-                borderRadius:
-                    '999px',
-                background:
-                    'rgba(10,14,18,.9)',
-                border:
-                    `1px solid ${error ? '#ff3b6b' : '#00ffff'}`,
-                color: '#fff',
-                font:
-                    '600 12px system-ui',
-                pointerEvents:
-                    'none'
-            }
-        );
-
-        document.body.appendChild(el);
-
-        setTimeout(
-            () => el.remove(),
-            1800
-        );
-    }
+    // ============================================================
+    // RESOLVER
+    // ============================================================
 
     async function resolverQuestao() {
-        if (busy) return;
+        if (
+            busy &&
+            CONFIG.preventDuplicateRequests
+        ) {
+            return;
+        }
 
         busy = true;
-
-        setCursorState(
-            'processing'
-        );
-
-        showStatus(
-            'Analisando questão...'
-        );
+        setCursorState('processing');
+        showStatus('Analisando questão...');
 
         try {
-            const quizData =
-                await extrairDadosDaQuestao();
-
-            if (!quizData) {
-                throw new Error(
-                    'Não foi possível extrair a questão.'
-                );
-            }
+            const data =
+                await extractQuestion();
 
             const fingerprint =
-                `${quizData.questionType}|${quizData.questionText}|${quizData.options?.map(x => x.text).join('|') || ''}`;
+                buildFingerprint(data);
 
-            lastQuestionFingerprint =
-                fingerprint;
-
-            console.log(
-                '[Nikolas v51.1] Dados extraídos:',
-                quizData
-            );
-
-            showStatus(
-                'Enviando para a IA...'
-            );
-
-            const aiAnswer =
-                await obterRespostaDaIA(
-                    quizData
+            if (
+                fingerprint === lastFingerprint &&
+                lastAnswer
+            ) {
+                showResult(
+                    lastAnswer,
+                    data,
+                    true
                 );
 
-            await performAction(
-                aiAnswer,
-                quizData
-            );
+                setCursorState('success');
+                showStatus(
+                    'Resposta já analisada.'
+                );
 
-            setCursorState(
-                'success'
-            );
+                return;
+            }
+
+            lastFingerprint =
+                fingerprint;
 
             showStatus(
-                'Resposta recebida.'
+                'Consultando a IA...'
             );
 
-            await sleep(
-                1000
+            const cached =
+                cacheGet(fingerprint);
+
+            const answer =
+                cached ||
+                await getAiAnswer(data);
+
+            lastAnswer = answer;
+
+            showResult(
+                answer,
+                data,
+                !!cached
             );
 
+            setCursorState('success');
+            showStatus(
+                cached
+                    ? 'Resposta recuperada do cache.'
+                    : 'Resposta recebida.'
+            );
         } catch (error) {
             console.error(
-                '[Nikolas v51.1] Falha:',
+                '[Nikolas v52] Falha:',
                 error
             );
 
-            setCursorState(
-                'error'
-            );
+            setCursorState('error');
 
             showStatus(
-                'Falha ao analisar — veja o Console (F12).',
+                error?.message ||
+                'Falha ao analisar a questão.',
                 true
             );
-
-            await sleep(
-                1200
-            );
-
         } finally {
-            setCursorState(
-                'normal'
-            );
+            await sleep(600);
 
+            setCursorState('normal');
             busy = false;
         }
     }
 
     // ============================================================
-    // ATALHO: ESPAÇO
+    // ATALHO
     // ============================================================
+
     document.addEventListener(
         'keydown',
         event => {
             if (
                 event.code !== 'Space' ||
                 event.repeat
-            ) return;
+            ) {
+                return;
+            }
 
             const target =
                 event.target;
 
             if (
-                target &&
-                (
-                    target.matches?.(
-                        'input, textarea, select, [contenteditable="true"]'
-                    ) ||
-                    target.closest?.(
-                        'input,textarea,select,[contenteditable="true"]'
-                    )
+                target?.matches?.(
+                    'input,textarea,select,[contenteditable="true"]'
+                ) ||
+                target?.closest?.(
+                    'input,textarea,select,[contenteditable="true"]'
                 )
-            ) return;
+            ) {
+                return;
+            }
 
             event.preventDefault();
-
             resolverQuestao();
         },
         true
     );
 
     // ============================================================
-    // IMAGENS / FETCH
+    // OBSERVADOR DE TROCA DE QUESTÃO
     // ============================================================
-    async function imageUrlToBase64(url) {
-        if (!url) return null;
 
-        if (
-            /^data:image\//i.test(url)
-        ) {
-            return url;
-        }
+    function startObserver() {
+        if (observer) return;
 
-        if (
-            /^blob:/i.test(url)
-        ) {
-            try {
-                const response =
-                    await fetchWithTimeout(
-                        url,
-                        {
-                            cache:
-                                'no-store'
-                        }
-                    );
+        observer =
+            new MutationObserver(() => {
+                // Apenas limpa a resposta anterior quando
+                // o texto principal realmente mudou.
+                const container =
+                    findQuestionContainer();
 
-                if (!response.ok) {
-                    throw new Error(
-                        `HTTP ${response.status}`
-                    );
-                }
-
-                const blob =
-                    await response.blob();
+                const currentText =
+                    getQuestionText(container);
 
                 if (
-                    !blob.type.startsWith(
-                        'image/'
+                    currentText &&
+                    !normalizeForMatch(
+                        currentText
+                    ).includes(
+                        normalizeForMatch(
+                            lastAnswer
+                        )
                     )
                 ) {
-                    throw new Error(
-                        `Tipo recebido: ${blob.type || 'desconhecido'}`
-                    );
+                    // Não fazemos requisição automática.
+                    // Apenas permitimos que a próxima
+                    // análise seja feita normalmente.
                 }
+            });
 
-                return await blobToDataUrl(
-                    blob
-                );
-
-            } catch (e) {
-                console.warn(
-                    '[Nikolas v51.1] Falha em blob:',
-                    e.message
-                );
-
-                return null;
-            }
-        }
-
-        try {
-            const parsed =
-                new URL(
-                    url,
-                    location.href
-                );
-
-            parsed.searchParams.set(
-                '_nikolas',
-                Date.now().toString()
-            );
-
-            const response =
-                await fetchWithTimeout(
-                    parsed.href,
-                    {
-                        cache:
-                            'no-store',
-                        credentials:
-                            'omit'
-                    }
-                );
-
-            if (!response.ok) {
-                throw new Error(
-                    `HTTP ${response.status}`
-                );
-            }
-
-            const blob =
-                await response.blob();
-
-            if (
-                !blob.type.startsWith(
-                    'image/'
-                )
-            ) {
-                throw new Error(
-                    `Resposta não é imagem (${blob.type || 'tipo desconhecido'})`
-                );
-            }
-
-            return await blobToDataUrl(
-                blob
-            );
-
-        } catch (e) {
-            console.warn(
-                '[Nikolas v51.1] Não foi possível baixar imagem:',
-                url,
-                e.message
-            );
-
-            return null;
-        }
-    }
-
-    function blobToDataUrl(blob) {
-        return new Promise(
-            (resolve, reject) => {
-                const reader =
-                    new FileReader();
-
-                reader.onload =
-                    () =>
-                        resolve(
-                            reader.result
-                        );
-
-                reader.onerror =
-                    reject;
-
-                reader.readAsDataURL(
-                    blob
-                );
+        observer.observe(
+            document.body,
+            {
+                childList: true,
+                subtree: true,
+                characterData: true
             }
         );
     }
 
-    async function fetchWithTimeout(
-        resource,
-        options = {},
-        timeout = 30000
-    ) {
-        const controller =
-            new AbortController();
-
-        const id =
-            setTimeout(
-                () =>
-                    controller.abort(),
-                timeout
-            );
-
-        try {
-            return await fetch(
-                resource,
-                {
-                    ...options,
-                    signal:
-                        controller.signal
-                }
-            );
-
-        } catch (error) {
-            if (
-                error.name ===
-                'AbortError'
-            ) {
-                throw new Error(
-                    'Timeout na requisição.'
-                );
-            }
-
-            throw error;
-
-        } finally {
-            clearTimeout(id);
-        }
-    }
-        // ============================================================
-    // DETECTOR DE QUIZ ID (mantido para compatibilidade)
     // ============================================================
+    // DETECTOR DE QUIZ ID
+    // ============================================================
+
+    const regexQuizId =
+        /\/(?:quiz|quizzes|admin\/quiz|games|attempts|join)\/([a-f0-9]{24})/i;
+
+    let detectedQuizId = null;
+
     function logQuizId(id, source) {
-        if (id === quizIdDetected) return;
+        if (
+            !id ||
+            id === detectedQuizId
+        ) {
+            return;
+        }
 
-        quizIdDetected = id;
+        detectedQuizId = id;
 
-        console.log(
-            `[Quizizz Bypass] Novo Quiz ID detectado (${source}): ${id}`
+        log(
+            `Quiz ID detectado (${source}):`,
+            id
         );
     }
 
-    function detectQuizIdFromURL() {
-        const match =
+    function detectQuizIdFromUrl() {
+        return (
             location.pathname.match(
                 regexQuizId
-            );
-
-        return match
-            ? match[1]
-            : null;
-    }
-
-    function interceptFetch() {
-        const originalFetch =
-            window.fetch;
-
-        if (
-            originalFetch.__nikolasWrapped
-        ) return;
-
-        const wrapped =
-            async function (...args) {
-                const resource =
-                    args[0];
-
-                const url =
-                    typeof resource ===
-                    'string'
-                        ? resource
-                        : resource?.url;
-
-                if (url) {
-                    const match =
-                        String(url).match(
-                            regexQuizId
-                        );
-
-                    if (match) {
-                        logQuizId(
-                            match[1],
-                            'fetch'
-                        );
-                    }
-                }
-
-                return originalFetch.apply(
-                    this,
-                    args
-                );
-            };
-
-        wrapped.__nikolasWrapped =
-            true;
-
-        window.fetch =
-            wrapped;
-    }
-
-    function interceptXHR() {
-        const originalOpen =
-            XMLHttpRequest
-                .prototype
-                .open;
-
-        if (
-            originalOpen.__nikolasWrapped
-        ) return;
-
-        function wrapped(
-            method,
-            url
-        ) {
-            if (
-                typeof url ===
-                'string'
-            ) {
-                const match =
-                    url.match(
-                        regexQuizId
-                    );
-
-                if (match) {
-                    logQuizId(
-                        match[1],
-                        'XHR'
-                    );
-                }
-            }
-
-            return originalOpen.apply(
-                this,
-                arguments
-            );
-        }
-
-        wrapped.__nikolasWrapped =
-            true;
-
-        XMLHttpRequest.prototype.open =
-            wrapped;
+            )?.[1] || null
+        );
     }
 
     function initQuizIdDetector() {
         const id =
-            detectQuizIdFromURL();
+            detectQuizIdFromUrl();
 
         if (id) {
-            logQuizId(
-                id,
-                'URL'
-            );
-        }
-
-        if (
-            !interceptorsStarted
-        ) {
-            interceptFetch();
-            interceptXHR();
-
-            interceptorsStarted =
-                true;
+            logQuizId(id, 'URL');
         }
     }
 
-    (function monitorSPA() {
-        const pushState =
+    function monitorSpaNavigation() {
+        const originalPush =
             history.pushState;
 
         history.pushState =
-            function () {
+            function (...args) {
                 const result =
-                    pushState.apply(
+                    originalPush.apply(
                         this,
-                        arguments
+                        args
                     );
 
                 setTimeout(
                     initQuizIdDetector,
-                    300
+                    150
                 );
 
                 return result;
@@ -2194,21 +2929,64 @@
             () =>
                 setTimeout(
                     initQuizIdDetector,
-                    300
+                    150
                 )
         );
-    })();
+    }
 
     // ============================================================
-    // INÍCIO
+    // INICIALIZAÇÃO
     // ============================================================
-    setCursorState(
-        'normal'
-    );
 
-    initQuizIdDetector();
+    function init() {
+        if (initialized) return;
 
-    console.log(
-        '[Nikolas v51.1] Carregado. Pressione ESPAÇO para analisar a questão.'
-    );
+        initialized = true;
+
+        setCursorState('normal');
+
+        initQuizIdDetector();
+        monitorSpaNavigation();
+        startObserver();
+
+        console.log(
+            '%c[Nikolas v52] Carregado.',
+            'color:#00ffff;font-weight:700'
+        );
+
+        console.log(
+            '[Nikolas v52] Pressione ESPAÇO para analisar a questão.'
+        );
+
+        if (
+            CONFIG.provider === 'gemini' &&
+            !GEMINI_API_KEYS.some(isConfiguredKey)
+        ) {
+            warn(
+                'Nenhuma chave Gemini configurada.'
+            );
+        }
+
+        if (
+            CONFIG.provider === 'openrouter' &&
+            !OPENROUTER_API_KEYS.some(isConfiguredKey)
+        ) {
+            warn(
+                'Nenhuma chave OpenRouter configurada.'
+            );
+        }
+    }
+
+    if (
+        document.readyState ===
+        'loading'
+    ) {
+        document.addEventListener(
+            'DOMContentLoaded',
+            init,
+            { once: true }
+        );
+    } else {
+        init();
+    }
 })();
