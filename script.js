@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Nikolas Quizizz v51.5 - Study Mode
-// @version      51.5
-// @description  Assistente de estudo visual para Wayground/Quizizz
+// @name         Nikolas Quizizz v51.6 - Resposta + Resolução
+// @version      51.6
+// @description  Mostra a resposta na tela e a resolução completa no console
 // @author       Nikolas
 // @match        https://wayground.com/join/game/*
 // @grant        none
@@ -13,849 +13,334 @@
     // =========================================================
     // CONFIGURAÇÃO
     // =========================================================
-
     const GEMINI_API_KEYS = [
         "CHAVE_GEMINI_1",
         "CHAVE_GEMINI_2",
         "CHAVE_GEMINI_3"
     ];
-
     const MODEL = "gemini-2.5-flash";
-
     const REQUEST_TIMEOUT = 45000;
     const MAX_RETRIES_PER_KEY = 2;
-
     let currentKeyIndex = 0;
     let busy = false;
 
     // =========================================================
     // IDs
     // =========================================================
-
-    const STYLE_ID = "nikolas-v515-style";
-    const CURSOR_ID = "nikolas-v515-cursor";
-    const RESULT_ID = "nikolas-v515-result";
+    const STYLE_ID = "nikolas-v516-style";
+    const BALL_ID = "nikolas-v516-ball";
+    const RESULT_ID = "nikolas-v516-result";
 
     // =========================================================
     // ESTILO
     // =========================================================
-
     function injectStyle() {
         if (document.getElementById(STYLE_ID)) return;
 
         const style = document.createElement("style");
         style.id = STYLE_ID;
-
         style.textContent = `
-            /*
-             * CURSOR REALMENTE SUBSTITUÍDO
-             */
-
-            html.nikolas-v515-custom-cursor,
-            html.nikolas-v515-custom-cursor *,
-            html.nikolas-v515-custom-cursor button,
-            html.nikolas-v515-custom-cursor a,
-            html.nikolas-v515-custom-cursor input,
-            html.nikolas-v515-custom-cursor textarea,
-            html.nikolas-v515-custom-cursor select {
-                cursor: none !important;
-            }
-
-            #${CURSOR_ID} {
+            #${BALL_ID} {
                 position: fixed;
-                left: 0;
-                top: 0;
-
-                width: 32px;
-                height: 40px;
-
+                width: 22px;
+                height: 22px;
+                border-radius: 50%;
                 pointer-events: none;
-                user-select: none;
-
                 z-index: 2147483647;
-
                 opacity: 0;
-
-                transform:
-                    translate3d(
-                        0,
-                        0,
-                        0
-                    );
-
-                transition:
-                    opacity .15s ease,
-                    filter .2s ease;
+                transform: translate(-50%, -50%) scale(0.7);
+                transition: opacity .18s ease, transform .18s ease, background .2s ease, box-shadow .2s ease;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 13px;
+                font-weight: 700;
+                color: white;
+                box-shadow: 0 0 0 0 transparent;
             }
 
-            #${CURSOR_ID} svg {
-                width: 32px;
-                height: 40px;
-
-                display: block;
-
-                overflow: visible;
-
-                transition:
-                    transform .18s ease,
-                    filter .2s ease;
-            }
-
-            #${CURSOR_ID}.visible {
+            #${BALL_ID}.visible {
                 opacity: 1;
+                transform: translate(-50%, -50%) scale(1);
             }
 
-            /*
-             * CURSOR NORMAL
-             */
-
-            #${CURSOR_ID}.normal svg {
-                filter:
-                    drop-shadow(0 0 3px rgba(0,255,255,.65))
-                    drop-shadow(0 0 8px rgba(0,255,255,.25));
+            #${BALL_ID}.loading {
+                background: #00c8ff;
+                box-shadow: 0 0 12px #00c8ff, 0 0 24px rgba(0,200,255,.4);
+                animation: nikolasSpin 0.7s linear infinite;
             }
 
-            /*
-             * CARREGANDO
-             */
-
-            #${CURSOR_ID}.loading svg {
-                transform: scale(1.08);
-                filter:
-                    drop-shadow(0 0 5px #00ffff)
-                    drop-shadow(0 0 13px #00ffff)
-                    drop-shadow(0 0 25px rgba(0,255,255,.55));
+            #${BALL_ID}.success {
+                background: #00d97e;
+                box-shadow: 0 0 12px #00d97e, 0 0 24px rgba(0,217,126,.45);
             }
 
-            #${CURSOR_ID}.loading .cursor-arrow {
-                opacity: .35;
+            #${BALL_ID}.error {
+                background: #ff3355;
+                box-shadow: 0 0 12px #ff3355, 0 0 24px rgba(255,51,85,.45);
             }
-
-            #${CURSOR_ID}.loading .cursor-loader {
-                opacity: 1;
-                animation:
-                    nikolasCursorSpin
-                    .8s linear infinite;
-                transform-origin: 16px 20px;
-            }
-
-            /*
-             * SUCESSO
-             */
-
-            #${CURSOR_ID}.success svg {
-                transform: scale(1.12);
-                filter:
-                    drop-shadow(0 0 5px #00ff88)
-                    drop-shadow(0 0 14px #00ff88)
-                    drop-shadow(0 0 28px rgba(0,255,136,.6));
-            }
-
-            #${CURSOR_ID}.success .cursor-check {
-                opacity: 1;
-                animation:
-                    nikolasCheck
-                    .35s ease-out;
-            }
-
-            /*
-             * ERRO
-             */
-
-            #${CURSOR_ID}.error svg {
-                transform: scale(1.12);
-                filter:
-                    drop-shadow(0 0 5px #ff3355)
-                    drop-shadow(0 0 14px #ff3355)
-                    drop-shadow(0 0 28px rgba(255,51,85,.6));
-            }
-
-            #${CURSOR_ID}.error .cursor-error {
-                opacity: 1;
-                animation:
-                    nikolasError
-                    .35s ease-out;
-            }
-
-            /*
-             * RESULTADO
-             */
 
             #${RESULT_ID} {
                 position: fixed;
-
                 left: 50%;
                 bottom: 34px;
-
-                transform:
-                    translateX(-50%)
-                    translateY(15px);
-
-                width:
-                    min(520px, calc(100vw - 40px));
-
+                transform: translateX(-50%) translateY(15px);
+                width: min(420px, calc(100vw - 40px));
                 box-sizing: border-box;
-
-                padding: 15px 18px;
-
+                padding: 16px 20px;
                 border-radius: 14px;
-
-                background:
-                    linear-gradient(
-                        135deg,
-                        rgba(8,14,21,.97),
-                        rgba(10,22,29,.96)
-                    );
-
-                border:
-                    1px solid rgba(0,255,255,.35);
-
-                box-shadow:
-                    0 8px 35px rgba(0,0,0,.35),
-                    0 0 25px rgba(0,255,255,.08);
-
+                background: linear-gradient(135deg, rgba(8,14,21,.97), rgba(10,22,29,.96));
+                border: 1px solid rgba(0,255,136,.4);
+                box-shadow: 0 8px 35px rgba(0,0,0,.35), 0 0 25px rgba(0,255,136,.1);
                 color: #fff;
-
-                font-family:
-                    Inter,
-                    Poppins,
-                    Arial,
-                    sans-serif;
-
+                font-family: Inter, Poppins, Arial, sans-serif;
                 z-index: 2147483646;
-
                 opacity: 0;
-
-                animation:
-                    nikolasResultIn
-                    .25s ease-out
-                    forwards;
-            }
-
-            #${RESULT_ID}.success {
-                border-color:
-                    rgba(0,255,136,.42);
-
-                box-shadow:
-                    0 8px 35px rgba(0,0,0,.35),
-                    0 0 25px rgba(0,255,136,.08);
+                animation: nikolasResultIn .25s ease-out forwards;
             }
 
             #${RESULT_ID}.error {
-                border-color:
-                    rgba(255,51,85,.45);
-
-                box-shadow:
-                    0 8px 35px rgba(0,0,0,.35),
-                    0 0 25px rgba(255,51,85,.08);
+                border-color: rgba(255,51,85,.5);
+                box-shadow: 0 8px 35px rgba(0,0,0,.35), 0 0 25px rgba(255,51,85,.1);
             }
 
             .nikolas-result-header {
                 display: flex;
                 align-items: center;
                 gap: 9px;
-
-                margin-bottom: 7px;
-
+                margin-bottom: 6px;
                 font-size: 11px;
                 font-weight: 700;
-
                 letter-spacing: .12em;
                 text-transform: uppercase;
-
                 opacity: .7;
             }
 
             .nikolas-result-dot {
                 width: 7px;
                 height: 7px;
-
                 border-radius: 50%;
-
-                background: #00ffff;
-
-                box-shadow:
-                    0 0 8px #00ffff;
+                background: #00ff88;
+                box-shadow: 0 0 8px #00ff88;
             }
 
             .nikolas-result-text {
-                font-size: 15px;
-                line-height: 1.45;
-                font-weight: 600;
+                font-size: 22px;
+                line-height: 1.3;
+                font-weight: 700;
+                letter-spacing: 0.5px;
             }
 
             .nikolas-result-hint {
-                margin-top: 7px;
-
-                font-size: 11px;
-
-                color:
-                    rgba(255,255,255,.48);
+                margin-top: 8px;
+                font-size: 12px;
+                color: rgba(255,255,255,.5);
             }
 
-            @keyframes nikolasCursorSpin {
-                from {
-                    transform: rotate(0deg);
-                }
-
-                to {
-                    transform: rotate(360deg);
-                }
-            }
-
-            @keyframes nikolasCheck {
-                from {
-                    opacity: 0;
-                    transform: scale(.5);
-                }
-
-                to {
-                    opacity: 1;
-                    transform: scale(1);
-                }
-            }
-
-            @keyframes nikolasError {
-                0%, 100% {
-                    transform: translateX(0);
-                }
-
-                25% {
-                    transform: translateX(-3px);
-                }
-
-                75% {
-                    transform: translateX(3px);
-                }
+            @keyframes nikolasSpin {
+                from { transform: translate(-50%, -50%) rotate(0deg); }
+                to   { transform: translate(-50%, -50%) rotate(360deg); }
             }
 
             @keyframes nikolasResultIn {
                 from {
                     opacity: 0;
-                    transform:
-                        translateX(-50%)
-                        translateY(15px);
+                    transform: translateX(-50%) translateY(15px);
                 }
-
                 to {
                     opacity: 1;
-                    transform:
-                        translateX(-50%)
-                        translateY(0);
+                    transform: translateX(-50%) translateY(0);
                 }
             }
         `;
-
         document.head.appendChild(style);
     }
 
     // =========================================================
-    // CURSOR CUSTOMIZADO
+    // BOLINHA DE STATUS (não mexe no cursor normal)
     // =========================================================
-
     let mouseX = 0;
     let mouseY = 0;
 
-    function createCursor() {
-        let cursor =
-            document.getElementById(CURSOR_ID);
+    document.addEventListener("mousemove", e => {
+        mouseX = e.clientX;
+        mouseY = e.clientY;
+        const ball = document.getElementById(BALL_ID);
+        if (ball && ball.classList.contains("visible")) {
+            ball.style.left = mouseX + "px";
+            ball.style.top = mouseY + "px";
+        }
+    }, true);
 
-        if (cursor) return cursor;
+    function createBall() {
+        let ball = document.getElementById(BALL_ID);
+        if (ball) return ball;
 
-        cursor =
-            document.createElement("div");
-
-        cursor.id = CURSOR_ID;
-
-        cursor.innerHTML = `
-            <svg
-                viewBox="0 0 32 40"
-                xmlns="http://www.w3.org/2000/svg"
-            >
-
-                <!-- Seta principal -->
-                <path
-                    class="cursor-arrow"
-                    d="
-                        M3 2
-                        L3 29
-                        L10 22
-                        L16 36
-                        L21 33
-                        L15 20
-                        L27 20
-                        Z
-                    "
-                    fill="#07151c"
-                    stroke="#00ffff"
-                    stroke-width="1.8"
-                    stroke-linejoin="round"
-                />
-
-                <!-- Anel de carregamento -->
-                <circle
-                    class="cursor-loader"
-                    cx="16"
-                    cy="20"
-                    r="12"
-                    fill="none"
-                    stroke="#00ffff"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-dasharray="8 6"
-                    opacity="0"
-                />
-
-                <!-- Check -->
-                <path
-                    class="cursor-check"
-                    d="M8 19 L13 24 L23 13"
-                    fill="none"
-                    stroke="#00ff88"
-                    stroke-width="3"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    opacity="0"
-                />
-
-                <!-- X -->
-                <path
-                    class="cursor-error"
-                    d="M10 14 L22 26 M22 14 L10 26"
-                    fill="none"
-                    stroke="#ff3355"
-                    stroke-width="3"
-                    stroke-linecap="round"
-                    opacity="0"
-                />
-
-            </svg>
-        `;
-
-        document.body.appendChild(cursor);
-
-        return cursor;
+        ball = document.createElement("div");
+        ball.id = BALL_ID;
+        document.body.appendChild(ball);
+        return ball;
     }
 
-    function moveCursor() {
-        const cursor =
-            document.getElementById(CURSOR_ID);
+    function setBallStatus(type) {
+        const ball = createBall();
+        ball.className = ""; // limpa tudo
 
-        if (!cursor) return;
-
-        cursor.style.transform =
-            `translate3d(
-                ${mouseX + 1}px,
-                ${mouseY + 1}px,
-                0
-            )`;
-    }
-
-    document.addEventListener(
-        "mousemove",
-        event => {
-            mouseX = event.clientX;
-            mouseY = event.clientY;
-
-            moveCursor();
-        },
-        true
-    );
-
-    function setCursorStatus(type) {
-        const cursor =
-            createCursor();
-
-        cursor.classList.remove(
-            "normal",
-            "loading",
-            "success",
-            "error"
-        );
-
-        if (type === "normal") {
-            cursor.classList.add(
-                "normal",
-                "visible"
-            );
-            return;
+        if (type === "loading") {
+            ball.textContent = "";
+            ball.classList.add("loading", "visible");
+        } else if (type === "success") {
+            ball.textContent = "✓";
+            ball.classList.add("success", "visible");
+        } else if (type === "error") {
+            ball.textContent = "✕";
+            ball.classList.add("error", "visible");
+        } else {
+            ball.classList.remove("visible");
         }
 
-        cursor.classList.add(
-            type,
-            "visible"
-        );
-    }
-
-    function enableCustomCursor() {
-        document.documentElement
-            .classList
-            .add(
-                "nikolas-v515-custom-cursor"
-            );
-
-        const cursor =
-            createCursor();
-
-        cursor.classList.add(
-            "normal",
-            "visible"
-        );
-    }
-
-    function disableCustomCursor() {
-        document.documentElement
-            .classList
-            .remove(
-                "nikolas-v515-custom-cursor"
-            );
-
-        const cursor =
-            document.getElementById(
-                CURSOR_ID
-            );
-
-        if (cursor) {
-            cursor.classList.remove(
-                "visible"
-            );
-        }
+        // posiciona na posição atual do mouse
+        ball.style.left = mouseX + "px";
+        ball.style.top = mouseY + "px";
     }
 
     // =========================================================
     // UTILITÁRIOS
     // =========================================================
-
-    const sleep = ms =>
-        new Promise(resolve =>
-            setTimeout(resolve, ms)
-        );
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
 
     function cleanText(text) {
-        return String(text || "")
-            .replace(/\s+/g, " ")
-            .trim();
+        return String(text || "").replace(/\s+/g, " ").trim();
     }
 
     function validKey(key) {
-        return key &&
-            !key.includes("CHAVE_GEMINI") &&
-            !key.includes("SUA_CHAVE") &&
-            key.length > 20;
+        return key && !key.includes("CHAVE_GEMINI") && !key.includes("SUA_CHAVE") && key.length > 20;
     }
 
-    function fetchWithTimeout(
-        url,
-        options,
-        timeout = REQUEST_TIMEOUT
-    ) {
-        return new Promise(
-            (resolve, reject) => {
+    function fetchWithTimeout(url, options, timeout = REQUEST_TIMEOUT) {
+        return new Promise((resolve, reject) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => {
+                controller.abort();
+                reject(new Error("Timeout na requisição."));
+            }, timeout);
 
-                const controller =
-                    new AbortController();
-
-                const timer =
-                    setTimeout(() => {
-                        controller.abort();
-
-                        reject(
-                            new Error(
-                                "Timeout na requisição."
-                            )
-                        );
-                    }, timeout);
-
-                fetch(url, {
-                    ...options,
-                    signal:
-                        controller.signal
+            fetch(url, { ...options, signal: controller.signal })
+                .then(res => {
+                    clearTimeout(timer);
+                    resolve(res);
                 })
-                    .then(response => {
-                        clearTimeout(timer);
-                        resolve(response);
-                    })
-                    .catch(error => {
-                        clearTimeout(timer);
-
-                        if (
-                            error.name ===
-                            "AbortError"
-                        ) {
-                            reject(
-                                new Error(
-                                    "Timeout na requisição."
-                                )
-                            );
-                        } else {
-                            reject(error);
-                        }
-                    });
-            }
-        );
+                .catch(err => {
+                    clearTimeout(timer);
+                    if (err.name === "AbortError") reject(new Error("Timeout na requisição."));
+                    else reject(err);
+                });
+        });
     }
 
     // =========================================================
-    // EXTRAÇÃO DO LAYOUT NOVO
+    // EXTRAÇÃO DA QUESTÃO
     // =========================================================
-
     function getBodyLines() {
-        return document.body.innerText
-            .split("\n")
-            .map(cleanText)
-            .filter(Boolean);
+        return document.body.innerText.split("\n").map(cleanText).filter(Boolean);
     }
 
     function extractActivityQuestion() {
-        const lines =
-            getBodyLines();
+        const lines = getBodyLines();
+        const ignored = new Set([
+            "Eliminador de Respostas", "Leitor de linha", "Marca texto",
+            "Configurações", "Tela cheia", "Próximo"
+        ]);
 
-        const ignored =
-            new Set([
-                "Eliminador de Respostas",
-                "Leitor de linha",
-                "Marca texto",
-                "Configurações",
-                "Tela cheia",
-                "Próximo"
-            ]);
+        const cleaned = lines.filter(x => !ignored.has(x));
 
-        const cleaned =
-            lines.filter(
-                x => !ignored.has(x)
-            );
-
-        let start =
-            cleaned.findIndex(x =>
-                /^Question text:$/i.test(x) ||
-                /^Texto da questão:$/i.test(x)
-            );
+        let start = cleaned.findIndex(x =>
+            /^Question text:$/i.test(x) || /^Texto da questão:$/i.test(x)
+        );
 
         if (start === -1) {
-            start =
-                cleaned.findIndex(x =>
-                    x.toLowerCase()
-                        .includes(
-                            "question text:"
-                        )
-                );
+            start = cleaned.findIndex(x => x.toLowerCase().includes("question text:"));
         }
 
-        if (start === -1) {
-            console.warn(
-                "[Nikolas v51.5] Não encontrei Question text."
-            );
-
-            return null;
-        }
+        if (start === -1) return null;
 
         const questionLines = [];
         const options = [];
-
         let i = start + 1;
 
         while (i < cleaned.length) {
-            const line =
-                cleaned[i];
-
-            if (/^[A-H]$/.test(line)) {
-                break;
-            }
-
-            if (
-                /^Questão \d+ de \d+$/i
-                    .test(line) ||
-                /^Question \d+ of \d+$/i
-                    .test(line)
-            ) {
-                break;
-            }
-
+            const line = cleaned[i];
+            if (/^[A-H]$/.test(line)) break;
+            if (/^Questão \d+ de \d+$/i.test(line) || /^Question \d+ of \d+$/i.test(line)) break;
             questionLines.push(line);
-
             i++;
         }
 
         while (i < cleaned.length) {
-            const letter =
-                cleaned[i];
-
+            const letter = cleaned[i];
             if (!/^[A-H]$/.test(letter)) {
                 i++;
                 continue;
             }
-
-            const next =
-                cleaned[i + 1];
-
-            if (
-                !next ||
-                /^[A-H]$/.test(next) ||
-                /^Questão \d+ de \d+$/i
-                    .test(next) ||
-                /^Question \d+ of \d+$/i
-                    .test(next)
-            ) {
+            const next = cleaned[i + 1];
+            if (!next || /^[A-H]$/.test(next) ||
+                /^Questão \d+ de \d+$/i.test(next) ||
+                /^Question \d+ of \d+$/i.test(next)) {
                 i++;
                 continue;
             }
-
-            options.push({
-                letter,
-                text: next
-            });
-
+            options.push({ letter, text: next });
             i += 2;
-
-            if (options.length >= 8) {
-                break;
-            }
+            if (options.length >= 8) break;
         }
 
-        const questionText =
-            cleanText(
-                questionLines.join(" ")
-            );
+        const questionText = cleanText(questionLines.join(" "));
+        if (!questionText) return null;
 
-        if (!questionText) {
-            return null;
-        }
-
-        console.log(
-            "[Nikolas v51.5] Questão:",
-            questionText
-        );
-
-        console.log(
-            "[Nikolas v51.5] Opções:",
-            options
-        );
-
-        return {
-            questionText,
-            options
-        };
+        return { questionText, options };
     }
 
-    // =========================================================
-    // EXTRAÇÃO TRADICIONAL
-    // =========================================================
-
     function extractTraditionalQuestion() {
-        const el =
-            document.querySelector(
-                "#questionText"
-            );
-
+        const el = document.querySelector("#questionText");
         if (!el) return null;
 
-        const questionText =
-            cleanText(
-                el.innerText
-            );
+        const questionText = cleanText(el.innerText);
+        const optionElements = document.querySelectorAll(".option.is-selectable");
 
-        const optionElements =
-            document.querySelectorAll(
-                ".option.is-selectable"
-            );
+        const options = Array.from(optionElements).map((el, index) => ({
+            letter: String.fromCharCode(65 + index),
+            text: cleanText(el.querySelector("#optionText")?.innerText || el.innerText)
+        })).filter(x => x.text);
 
-        const options =
-            Array.from(optionElements)
-                .map((el, index) => ({
-                    letter:
-                        String.fromCharCode(
-                            65 + index
-                        ),
-
-                    text:
-                        cleanText(
-                            el.querySelector(
-                                "#optionText"
-                            )?.innerText ||
-                            el.innerText
-                        )
-                }))
-                .filter(
-                    x => x.text
-                );
-
-        if (!questionText) {
-            return null;
-        }
-
-        console.log(
-            "[Nikolas v51.5] Layout tradicional detectado."
-        );
-
-        return {
-            questionText,
-            options
-        };
+        if (!questionText) return null;
+        return { questionText, options };
     }
 
     function extractQuestion() {
-        const traditional =
-            extractTraditionalQuestion();
-
-        if (traditional) {
-            return traditional;
-        }
-
-        const activity =
-            extractActivityQuestion();
-
-        if (activity) {
-            console.log(
-                "[Nikolas v51.5] Layout de atividade detectado."
-            );
-
-            return activity;
-        }
-
-        return null;
+        return extractTraditionalQuestion() || extractActivityQuestion();
     }
 
     // =========================================================
-    // PROMPT — MODO ESTUDO
+    // PROMPT — AGORA PEDE A RESPOSTA
     // =========================================================
-
     function buildPrompt(data) {
-        const optionsText =
-            data.options.length
-                ? data.options
-                    .map(o =>
-                        `${o.letter}) ${o.text}`
-                    )
-                    .join("\n")
-                : "Não foram detectadas alternativas.";
+        const optionsText = data.options.length
+            ? data.options.map(o => `${o.letter}) ${o.text}`).join("\n")
+            : "Não foram detectadas alternativas.";
 
         return `
-Você é um tutor de estudos.
+Você é um professor especialista.
+Analise a questão abaixo e responda no formato obrigatório.
 
-Analise a questão abaixo e ajude o estudante
-a compreender o conteúdo e o raciocínio necessário.
+FORMATO OBRIGATÓRIO (não invente outros títulos):
 
-IMPORTANTE:
-- Não informe a letra de uma alternativa.
-- Não diga "A resposta é A/B/C/D".
-- Não selecione ou indique diretamente uma alternativa.
-- Explique o conceito necessário para resolver.
-- Mostre o raciocínio de forma clara.
-- Se houver cálculo, mostre o método e as contas.
-- Se for português ou inglês, explique a regra.
-- Se for história/geografia/ciências, explique o conceito.
-- Termine com uma dica curta para o estudante.
+RESPOSTA:
+[apenas a letra da alternativa correta, ex: B]
 
-FORMATO OBRIGATÓRIO:
-
-CONCLUSÃO CURTA:
-[uma frase curta sobre o conceito/resultado que o estudante deve entender]
-
-EXPLICAÇÃO:
-[explicação detalhada]
-
-DICA:
-[uma dica curta]
+RESOLUÇÃO:
+[explicação completa, clara e bem escrita do porquê essa é a resposta correta.
+Mostre o raciocínio passo a passo. Se tiver cálculo, mostre as contas.
+Se for português/inglês, explique a regra. Se for história/ciências, explique o conceito.]
 
 QUESTÃO:
 ${data.questionText}
@@ -868,542 +353,215 @@ ${optionsText}
     // =========================================================
     // GEMINI
     // =========================================================
-
     async function askGemini(data) {
-        const prompt =
-            buildPrompt(data);
-
+        const prompt = buildPrompt(data);
         let lastError = null;
 
         if (!GEMINI_API_KEYS.length) {
-            throw new Error(
-                "Nenhuma chave Gemini configurada."
-            );
+            throw new Error("Nenhuma chave Gemini configurada.");
         }
 
-        for (
-            let keyAttempt = 0;
-            keyAttempt <
-            GEMINI_API_KEYS.length;
-            keyAttempt++
-        ) {
-            const index =
-                (
-                    currentKeyIndex +
-                    keyAttempt
-                ) %
-                GEMINI_API_KEYS.length;
+        for (let keyAttempt = 0; keyAttempt < GEMINI_API_KEYS.length; keyAttempt++) {
+            const index = (currentKeyIndex + keyAttempt) % GEMINI_API_KEYS.length;
+            const key = GEMINI_API_KEYS[index];
 
-            const key =
-                GEMINI_API_KEYS[index];
+            if (!validKey(key)) continue;
 
-            if (!validKey(key)) {
-                console.warn(
-                    `[Nikolas v51.5] Chave #${index + 1} inválida.`
-                );
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`;
 
-                continue;
-            }
-
-            const url =
-                `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`;
-
-            for (
-                let retry = 0;
-                retry <=
-                MAX_RETRIES_PER_KEY;
-                retry++
-            ) {
+            for (let retry = 0; retry <= MAX_RETRIES_PER_KEY; retry++) {
                 try {
-                    console.log(
-                        `[Nikolas v51.5] Gemini chave #${index + 1}, tentativa ${retry + 1}`
-                    );
-
-                    const response =
-                        await fetchWithTimeout(
-                            url,
-                            {
-                                method: "POST",
-
-                                headers: {
-                                    "Content-Type":
-                                        "application/json"
-                                },
-
-                                body:
-                                    JSON.stringify({
-                                        contents: [{
-                                            parts: [{
-                                                text:
-                                                    prompt
-                                            }]
-                                        }],
-
-                                        generationConfig: {
-                                            temperature:
-                                                0.2,
-
-                                            maxOutputTokens:
-                                                900
-                                        }
-                                    })
+                    const response = await fetchWithTimeout(url, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: prompt }] }],
+                            generationConfig: {
+                                temperature: 0.15,
+                                maxOutputTokens: 1100
                             }
-                        );
+                        })
+                    });
 
                     if (response.ok) {
-                        const json =
-                            await response.json();
-
-                        const text =
-                            json
-                                ?.candidates?.[0]
-                                ?.content?.parts
-                                ?.map(
-                                    p =>
-                                        p.text ||
-                                        ""
-                                )
-                                .join("")
-                                .trim();
+                        const json = await response.json();
+                        const text = json?.candidates?.[0]?.content?.parts
+                            ?.map(p => p.text || "").join("").trim();
 
                         if (text) {
-                            currentKeyIndex =
-                                index;
-
-                            console.log(
-                                "[Nikolas v51.5] Gemini respondeu."
-                            );
-
+                            currentKeyIndex = index;
                             return text;
                         }
-
-                        throw new Error(
-                            "Gemini retornou resposta vazia."
-                        );
+                        throw new Error("Gemini retornou resposta vazia.");
                     }
 
-                    let errorMessage =
-                        `HTTP ${response.status}`;
-
+                    let errorMessage = `HTTP ${response.status}`;
                     try {
-                        const errorJson =
-                            await response.json();
-
-                        errorMessage =
-                            errorJson
-                                ?.error?.message ||
-                            errorMessage;
-
+                        const errorJson = await response.json();
+                        errorMessage = errorJson?.error?.message || errorMessage;
                     } catch (_) {}
 
-                    lastError =
-                        new Error(
-                            errorMessage
-                        );
+                    lastError = new Error(errorMessage);
 
-                    console.warn(
-                        `[Nikolas v51.5] Gemini #${index + 1}: ${errorMessage}`
-                    );
-
-                    const retryable =
-                        [
-                            429,
-                            500,
-                            502,
-                            503,
-                            504
-                        ].includes(
-                            response.status
-                        );
-
-                    if (
-                        retryable &&
-                        retry <
-                            MAX_RETRIES_PER_KEY
-                    ) {
-                        const delay =
-                            2500 *
-                            Math.pow(
-                                2,
-                                retry
-                            );
-
-                        console.log(
-                            `[Nikolas v51.5] Retry em ${delay}ms`
-                        );
-
-                        await sleep(
-                            delay
-                        );
-
+                    const retryable = [429, 500, 502, 503, 504].includes(response.status);
+                    if (retryable && retry < MAX_RETRIES_PER_KEY) {
+                        await sleep(2500 * Math.pow(2, retry));
                         continue;
                     }
-
                     break;
 
                 } catch (error) {
-                    lastError =
-                        error;
-
-                    console.warn(
-                        `[Nikolas v51.5] Erro Gemini #${index + 1}:`,
-                        error.message
-                    );
-
-                    const temporary =
-                        /timeout|network|fetch/i
-                            .test(
-                                error.message
-                            );
-
-                    if (
-                        temporary &&
-                        retry <
-                            MAX_RETRIES_PER_KEY
-                    ) {
-                        const delay =
-                            2500 *
-                            Math.pow(
-                                2,
-                                retry
-                            );
-
-                        console.log(
-                            `[Nikolas v51.5] Nova tentativa em ${delay}ms`
-                        );
-
-                        await sleep(
-                            delay
-                        );
+                    lastError = error;
+                    const temporary = /timeout|network|fetch/i.test(error.message);
+                    if (temporary && retry < MAX_RETRIES_PER_KEY) {
+                        await sleep(2500 * Math.pow(2, retry));
                     }
                 }
             }
-
-            console.warn(
-                "[Nikolas v51.5] Tentando próxima chave..."
-            );
         }
 
-        throw (
-            lastError ||
-            new Error(
-                "Todas as chaves Gemini falharam."
-            )
-        );
+        throw lastError || new Error("Todas as chaves Gemini falharam.");
     }
 
     // =========================================================
-    // SEPARAR CONCLUSÃO DA EXPLICAÇÃO
+    // SEPARAR RESPOSTA DA RESOLUÇÃO
     // =========================================================
-
     function parseAIResponse(text) {
-        const clean =
-            String(text || "")
-                .trim();
+        const clean = String(text || "").trim();
 
-        let conclusion = "";
+        let answer = "";
+        let resolution = clean;
 
-        const match =
-            clean.match(
-                /CONCLUSÃO CURTA:\s*([\s\S]*?)(?=\n\s*(?:EXPLICAÇÃO|EXPLICACAO):)/i
-            );
-
-        if (match) {
-            conclusion =
-                cleanText(
-                    match[1]
-                );
+        // Tenta pegar a letra
+        const matchAnswer = clean.match(/RESPOSTA:\s*([A-H])/i);
+        if (matchAnswer) {
+            answer = matchAnswer[1].toUpperCase();
         }
 
-        if (!conclusion) {
-            const firstLine =
-                clean
-                    .split("\n")
-                    .map(cleanText)
-                    .find(Boolean);
-
-            conclusion =
-                firstLine ||
-                "Análise concluída.";
+        // Tenta pegar a resolução
+        const matchRes = clean.match(/RESOLUÇÃO:\s*([\s\S]*)/i);
+        if (matchRes) {
+            resolution = cleanText(matchRes[1]);
         }
 
-        return {
-            conclusion,
-            fullText: clean
-        };
+        // Fallback se não achar a letra
+        if (!answer) {
+            const letterMatch = clean.match(/\b([A-H])\b/);
+            if (letterMatch) answer = letterMatch[1].toUpperCase();
+            else answer = "?";
+        }
+
+        return { answer, resolution, fullText: clean };
     }
 
     // =========================================================
-    // CONSOLE PROFISSIONAL
+    // CONSOLE
     // =========================================================
-
-    function printConsoleExplanation(
-        data,
-        aiText
-    ) {
+    function printConsoleResolution(data, aiText, answer) {
         console.clear();
-
-        console.log(
-            "%c NIKOLAS SCRIPTS ",
-            `
-                background:#06151c;
-                color:#00ffff;
-                font-size:16px;
-                font-weight:bold;
-                padding:6px 12px;
-                border:1px solid #00ffff;
-                border-radius:6px;
-            `
-        );
-
+        console.log("%c NIKOLAS SCRIPTS ", `
+            background:#06151c;
+            color:#00ff88;
+            font-size:16px;
+            font-weight:bold;
+            padding:6px 12px;
+            border:1px solid #00ff88;
+            border-radius:6px;
+        `);
         console.log("");
-
-        console.log(
-            "%cQUESTÃO",
-            "color:#00ffff;font-weight:bold;font-size:13px;"
-        );
-
-        console.log(
-            data.questionText
-        );
-
+        console.log("%cQUESTÃO", "color:#00ffff;font-weight:bold;font-size:13px;");
+        console.log(data.questionText);
         console.log("");
-
-        console.log(
-            "%cEXPLICAÇÃO DETALHADA",
-            "color:#00ff88;font-weight:bold;font-size:13px;"
-        );
-
-        console.log(
-            aiText
-        );
-
+        console.log("%cRESPOSTA CORRETA → " + answer, "color:#00ff88;font-weight:bold;font-size:14px;");
         console.log("");
-
-        console.log(
-            "%c────────────────────────────────────────",
-            "color:#555;"
-        );
-
-        console.log(
-            "%cNikolas Scripts • Study Mode",
-            "color:#888;font-size:11px;"
-        );
+        console.log("%cRESOLUÇÃO DETALHADA", "color:#00ff88;font-weight:bold;font-size:13px;");
+        console.log(aiText);
+        console.log("");
+        console.log("%c────────────────────────────────────────", "color:#555;");
+        console.log("%cNikolas Scripts • Resposta + Resolução", "color:#888;font-size:11px;");
     }
 
     // =========================================================
-    // RESULTADO PEQUENO NA TELA
+    // RESULTADO NA TELA (mostra a RESPOSTA)
     // =========================================================
+    function showResult(answer, success = true) {
+        const old = document.getElementById(RESULT_ID);
+        if (old) old.remove();
 
-    function showResult(
-        conclusion,
-        success = true
-    ) {
-        const old =
-            document.getElementById(
-                RESULT_ID
-            );
+        const box = document.createElement("div");
+        box.id = RESULT_ID;
+        box.className = success ? "" : "error";
 
-        if (old) {
-            old.remove();
-        }
+        const header = document.createElement("div");
+        header.className = "nikolas-result-header";
 
-        const box =
-            document.createElement(
-                "div"
-            );
+        const dot = document.createElement("span");
+        dot.className = "nikolas-result-dot";
+        if (!success) dot.style.background = "#ff3355";
 
-        box.id =
-            RESULT_ID;
-
-        box.className =
-            success
-                ? "success"
-                : "error";
-
-        const header =
-            document.createElement(
-                "div"
-            );
-
-        header.className =
-            "nikolas-result-header";
-
-        const dot =
-            document.createElement(
-                "span"
-            );
-
-        dot.className =
-            "nikolas-result-dot";
-
-        const headerText =
-            document.createElement(
-                "span"
-            );
-
-        headerText.textContent =
-            success
-                ? "ANÁLISE CONCLUÍDA"
-                : "ERRO NA ANÁLISE";
+        const headerText = document.createElement("span");
+        headerText.textContent = success ? "RESPOSTA" : "ERRO";
 
         header.appendChild(dot);
-        header.appendChild(
-            headerText
-        );
+        header.appendChild(headerText);
 
-        const text =
-            document.createElement(
-                "div"
-            );
+        const text = document.createElement("div");
+        text.className = "nikolas-result-text";
+        text.textContent = success ? answer : "Não foi possível analisar";
 
-        text.className =
-            "nikolas-result-text";
-
-        text.textContent =
-            conclusion;
-
-        const hint =
-            document.createElement(
-                "div"
-            );
-
-        hint.className =
-            "nikolas-result-hint";
-
-        hint.textContent =
-            success
-                ? "Explicação detalhada disponível no console (F12)."
-                : "Veja o console (F12) para detalhes do erro.";
+        const hint = document.createElement("div");
+        hint.className = "nikolas-result-hint";
+        hint.textContent = success
+            ? "Resolução completa disponível no console (F12)"
+            : "Veja o console (F12) para detalhes do erro";
 
         box.appendChild(header);
         box.appendChild(text);
         box.appendChild(hint);
-
-        document.body.appendChild(
-            box
-        );
+        document.body.appendChild(box);
 
         setTimeout(() => {
             if (box.isConnected) {
-                box.style.opacity =
-                    "0";
-
-                box.style.transform =
-                    "translateX(-50%) translateY(8px)";
-
-                box.style.transition =
-                    "opacity .25s ease, transform .25s ease";
-
-                setTimeout(() => {
-                    box.remove();
-                }, 280);
+                box.style.opacity = "0";
+                box.style.transform = "translateX(-50%) translateY(8px)";
+                box.style.transition = "opacity .25s ease, transform .25s ease";
+                setTimeout(() => box.remove(), 280);
             }
-        }, 6500);
+        }, 7000);
     }
 
     // =========================================================
     // EXECUÇÃO
     // =========================================================
-
     async function analyze() {
         if (busy) return;
-
         busy = true;
 
-        setCursorStatus(
-            "loading"
-        );
+        setBallStatus("loading");
 
         try {
-            console.log(
-                "%c[Nikolas v51.5] Iniciando análise...",
-                "color:#00ffff;font-weight:bold;"
-            );
+            const data = extractQuestion();
+            if (!data) throw new Error("Não consegui detectar a questão nesta página.");
 
-            const data =
-                extractQuestion();
+            const raw = await askGemini(data);
+            const parsed = parseAIResponse(raw);
 
-            if (!data) {
-                throw new Error(
-                    "Não consegui detectar a questão nesta página."
-                );
-            }
+            // Console → resolução completa
+            printConsoleResolution(data, parsed.resolution, parsed.answer);
 
-            console.log(
-                "[Nikolas v51.5] Questão detectada."
-            );
+            // Tela → só a resposta
+            showResult(parsed.answer, true);
 
-            console.log(
-                "[Nikolas v51.5] Enviando para Gemini..."
-            );
-
-            const answer =
-                await askGemini(
-                    data
-                );
-
-            const parsed =
-                parseAIResponse(
-                    answer
-                );
-
-            /*
-             * Explicação completa somente no console.
-             */
-            printConsoleExplanation(
-                data,
-                parsed.fullText
-            );
-
-            /*
-             * Tela recebe somente
-             * a conclusão curta.
-             */
-            showResult(
-                parsed.conclusion,
-                true
-            );
-
-            setCursorStatus(
-                "success"
-            );
-
-            console.log(
-                "%c[Nikolas v51.5] Concluído.",
-                "color:#00ff88;font-weight:bold;"
-            );
-
-            await sleep(
-                1800
-            );
+            setBallStatus("success");
+            await sleep(1600);
 
         } catch (error) {
-
-            console.error(
-                "[Nikolas v51.5] ERRO:",
-                error
-            );
-
-            showResult(
-                "Não foi possível concluir a análise.",
-                false
-            );
-
-            setCursorStatus(
-                "error"
-            );
-
-            await sleep(
-                1800
-            );
-
+            console.error("[Nikolas] ERRO:", error);
+            showResult(null, false);
+            setBallStatus("error");
+            await sleep(1600);
         } finally {
-
-            setCursorStatus(
-                "normal"
-            );
-
+            setBallStatus("normal"); // esconde a bolinha
             busy = false;
         }
     }
@@ -1411,72 +569,28 @@ ${optionsText}
     // =========================================================
     // ESPAÇO
     // =========================================================
+    document.addEventListener("keydown", event => {
+        if (event.code !== "Space") return;
 
-    document.addEventListener(
-        "keydown",
-        event => {
+        const tag = document.activeElement?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
-            if (
-                event.code !==
-                "Space"
-            ) {
-                return;
-            }
-
-            const tag =
-                document.activeElement
-                    ?.tagName;
-
-            if (
-                tag === "INPUT" ||
-                tag === "TEXTAREA" ||
-                tag === "SELECT"
-            ) {
-                return;
-            }
-
-            event.preventDefault();
-
-            analyze();
-        },
-        true
-    );
+        event.preventDefault();
+        analyze();
+    }, true);
 
     // =========================================================
     // INICIALIZAÇÃO
     // =========================================================
-
     function init() {
-
         injectStyle();
-
-        enableCustomCursor();
-
-        console.log(
-            "%c[Nikolas v51.5] Carregado!",
-            "color:#00ffff;font-size:14px;font-weight:bold;"
-        );
-
-        console.log(
-            "%cPressione ESPAÇO para analisar.",
-            "color:#00ff88;font-weight:bold;"
-        );
+        console.log("%c[Nikolas v51.6] Carregado!", "color:#00ff88;font-size:14px;font-weight:bold;");
+        console.log("%cPressione ESPAÇO para analisar a questão.", "color:#00ffff;font-weight:bold;");
     }
 
-    if (
-        document.readyState ===
-        "loading"
-    ) {
-
-        document.addEventListener(
-            "DOMContentLoaded",
-            init,
-            { once: true }
-        );
-
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", init, { once: true });
     } else {
-
         init();
     }
-
 })();
