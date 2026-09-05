@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Nikolas Quizizz v51.6 - Resposta + Resolução
-// @version      51.6
-// @description  Mostra a resposta na tela e a resolução completa no console
+// @name         Nikolas Quizizz v51.7 - Resposta Completa
+// @version      51.7
+// @description  Mostra a resposta completa na tela e a resolução no console
 // @author       Nikolas
 // @match        https://wayground.com/join/game/*
 // @grant        none
@@ -27,9 +27,9 @@
     // =========================================================
     // IDs
     // =========================================================
-    const STYLE_ID = "nikolas-v516-style";
-    const BALL_ID = "nikolas-v516-ball";
-    const RESULT_ID = "nikolas-v516-result";
+    const STYLE_ID = "nikolas-v517-style";
+    const BALL_ID = "nikolas-v517-ball";
+    const RESULT_ID = "nikolas-v517-result";
 
     // =========================================================
     // ESTILO
@@ -40,6 +40,12 @@
         const style = document.createElement("style");
         style.id = STYLE_ID;
         style.textContent = `
+            /* Esconde o cursor enquanto a bolinha estiver ativa */
+            html.nikolas-hide-cursor,
+            html.nikolas-hide-cursor * {
+                cursor: none !important;
+            }
+
             #${BALL_ID} {
                 position: fixed;
                 width: 22px;
@@ -85,7 +91,7 @@
                 left: 50%;
                 bottom: 34px;
                 transform: translateX(-50%) translateY(15px);
-                width: min(420px, calc(100vw - 40px));
+                width: min(480px, calc(100vw - 40px));
                 box-sizing: border-box;
                 padding: 16px 20px;
                 border-radius: 14px;
@@ -125,10 +131,9 @@
             }
 
             .nikolas-result-text {
-                font-size: 22px;
-                line-height: 1.3;
-                font-weight: 700;
-                letter-spacing: 0.5px;
+                font-size: 18px;
+                line-height: 1.35;
+                font-weight: 600;
             }
 
             .nikolas-result-hint {
@@ -157,7 +162,7 @@
     }
 
     // =========================================================
-    // BOLINHA DE STATUS (não mexe no cursor normal)
+    // BOLINHA DE STATUS
     // =========================================================
     let mouseX = 0;
     let mouseY = 0;
@@ -184,22 +189,29 @@
 
     function setBallStatus(type) {
         const ball = createBall();
-        ball.className = ""; // limpa tudo
+        ball.className = "";
 
         if (type === "loading") {
             ball.textContent = "";
             ball.classList.add("loading", "visible");
-        } else if (type === "success") {
+            document.documentElement.classList.add("nikolas-hide-cursor");
+        } 
+        else if (type === "success") {
             ball.textContent = "✓";
             ball.classList.add("success", "visible");
-        } else if (type === "error") {
+            document.documentElement.classList.add("nikolas-hide-cursor");
+        } 
+        else if (type === "error") {
             ball.textContent = "✕";
             ball.classList.add("error", "visible");
-        } else {
+            document.documentElement.classList.add("nikolas-hide-cursor");
+        } 
+        else {
+            // esconde a bolinha e devolve o cursor normal
             ball.classList.remove("visible");
+            document.documentElement.classList.remove("nikolas-hide-cursor");
         }
 
-        // posiciona na posição atual do mouse
         ball.style.left = mouseX + "px";
         ball.style.top = mouseY + "px";
     }
@@ -321,7 +333,7 @@
     }
 
     // =========================================================
-    // PROMPT — AGORA PEDE A RESPOSTA
+    // PROMPT
     // =========================================================
     function buildPrompt(data) {
         const optionsText = data.options.length
@@ -424,40 +436,46 @@ ${optionsText}
     }
 
     // =========================================================
-    // SEPARAR RESPOSTA DA RESOLUÇÃO
+    // SEPARAR RESPOSTA + PEGAR TEXTO DA ALTERNATIVA
     // =========================================================
-    function parseAIResponse(text) {
+    function parseAIResponse(text, options) {
         const clean = String(text || "").trim();
 
-        let answer = "";
+        let letter = "";
         let resolution = clean;
 
-        // Tenta pegar a letra
         const matchAnswer = clean.match(/RESPOSTA:\s*([A-H])/i);
         if (matchAnswer) {
-            answer = matchAnswer[1].toUpperCase();
+            letter = matchAnswer[1].toUpperCase();
         }
 
-        // Tenta pegar a resolução
         const matchRes = clean.match(/RESOLUÇÃO:\s*([\s\S]*)/i);
         if (matchRes) {
             resolution = cleanText(matchRes[1]);
         }
 
-        // Fallback se não achar a letra
-        if (!answer) {
+        if (!letter) {
             const letterMatch = clean.match(/\b([A-H])\b/);
-            if (letterMatch) answer = letterMatch[1].toUpperCase();
-            else answer = "?";
+            if (letterMatch) letter = letterMatch[1].toUpperCase();
+            else letter = "?";
         }
 
-        return { answer, resolution, fullText: clean };
+        // Busca o texto da alternativa correspondente
+        let fullAnswer = letter;
+        if (options && options.length) {
+            const found = options.find(o => o.letter === letter);
+            if (found) {
+                fullAnswer = `${letter} - ${found.text}`;
+            }
+        }
+
+        return { letter, fullAnswer, resolution, fullText: clean };
     }
 
     // =========================================================
     // CONSOLE
     // =========================================================
-    function printConsoleResolution(data, aiText, answer) {
+    function printConsoleResolution(data, resolution, fullAnswer) {
         console.clear();
         console.log("%c NIKOLAS SCRIPTS ", `
             background:#06151c;
@@ -472,19 +490,19 @@ ${optionsText}
         console.log("%cQUESTÃO", "color:#00ffff;font-weight:bold;font-size:13px;");
         console.log(data.questionText);
         console.log("");
-        console.log("%cRESPOSTA CORRETA → " + answer, "color:#00ff88;font-weight:bold;font-size:14px;");
+        console.log("%cRESPOSTA → " + fullAnswer, "color:#00ff88;font-weight:bold;font-size:14px;");
         console.log("");
         console.log("%cRESOLUÇÃO DETALHADA", "color:#00ff88;font-weight:bold;font-size:13px;");
-        console.log(aiText);
+        console.log(resolution);
         console.log("");
         console.log("%c────────────────────────────────────────", "color:#555;");
-        console.log("%cNikolas Scripts • Resposta + Resolução", "color:#888;font-size:11px;");
+        console.log("%cNikolas Scripts • Resposta Completa", "color:#888;font-size:11px;");
     }
 
     // =========================================================
-    // RESULTADO NA TELA (mostra a RESPOSTA)
+    // RESULTADO NA TELA
     // =========================================================
-    function showResult(answer, success = true) {
+    function showResult(fullAnswer, success = true) {
         const old = document.getElementById(RESULT_ID);
         if (old) old.remove();
 
@@ -507,7 +525,7 @@ ${optionsText}
 
         const text = document.createElement("div");
         text.className = "nikolas-result-text";
-        text.textContent = success ? answer : "Não foi possível analisar";
+        text.textContent = success ? fullAnswer : "Não foi possível analisar";
 
         const hint = document.createElement("div");
         hint.className = "nikolas-result-hint";
@@ -527,7 +545,7 @@ ${optionsText}
                 box.style.transition = "opacity .25s ease, transform .25s ease";
                 setTimeout(() => box.remove(), 280);
             }
-        }, 7000);
+        }, 7500);
     }
 
     // =========================================================
@@ -544,13 +562,13 @@ ${optionsText}
             if (!data) throw new Error("Não consegui detectar a questão nesta página.");
 
             const raw = await askGemini(data);
-            const parsed = parseAIResponse(raw);
+            const parsed = parseAIResponse(raw, data.options);
 
             // Console → resolução completa
-            printConsoleResolution(data, parsed.resolution, parsed.answer);
+            printConsoleResolution(data, parsed.resolution, parsed.fullAnswer);
 
-            // Tela → só a resposta
-            showResult(parsed.answer, true);
+            // Tela → resposta completa (ex: B - Efeito estufa)
+            showResult(parsed.fullAnswer, true);
 
             setBallStatus("success");
             await sleep(1600);
@@ -561,7 +579,7 @@ ${optionsText}
             setBallStatus("error");
             await sleep(1600);
         } finally {
-            setBallStatus("normal"); // esconde a bolinha
+            setBallStatus("normal"); // esconde bolinha + devolve o cursor
             busy = false;
         }
     }
@@ -584,7 +602,7 @@ ${optionsText}
     // =========================================================
     function init() {
         injectStyle();
-        console.log("%c[Nikolas v51.6] Carregado!", "color:#00ff88;font-size:14px;font-weight:bold;");
+        console.log("%c[Nikolas v51.7] Carregado!", "color:#00ff88;font-size:14px;font-weight:bold;");
         console.log("%cPressione ESPAÇO para analisar a questão.", "color:#00ffff;font-weight:bold;");
     }
 
