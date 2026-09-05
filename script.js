@@ -156,68 +156,143 @@
     }
 
     // =========================================================
-    // CURSOR NEON
-    // =========================================================
+// CURSOR DE MOUSE NEON
+// =========================================================
 
-    let mouseX = 0;
-    let mouseY = 0;
+let mouseX = 0;
+let mouseY = 0;
 
-    function createCursor() {
-        let cursor = document.getElementById(
-            "nikolas-v514-cursor"
+function createCursor() {
+    let cursor = document.getElementById(
+        "nikolas-v514-mouse"
+    );
+
+    if (cursor) return cursor;
+
+    cursor = document.createElement("div");
+    cursor.id = "nikolas-v514-mouse";
+
+    Object.assign(cursor.style, {
+        position: "fixed",
+        left: "0px",
+        top: "0px",
+        width: "0",
+        height: "0",
+        zIndex: "2147483647",
+        pointerEvents: "none",
+        opacity: "0",
+        transform: "translate(-2px, -2px)"
+    });
+
+    // Desenho de seta de mouse
+    cursor.innerHTML = `
+        <svg
+            width="30"
+            height="38"
+            viewBox="0 0 30 38"
+            xmlns="http://www.w3.org/2000/svg"
+            style="
+                overflow:visible;
+                display:block;
+                filter:
+                    drop-shadow(0 0 3px #00ffff)
+                    drop-shadow(0 0 8px #00ffff);
+            "
+        >
+            <path
+                id="nikolas-cursor-path"
+                d="M3 2 L3 30 L10 23 L16 36 L21 33 L15 21 L26 21 Z"
+                fill="#06151b"
+                stroke="#00ffff"
+                stroke-width="2"
+                stroke-linejoin="round"
+            />
+        </svg>
+    `;
+
+    document.body.appendChild(cursor);
+
+    return cursor;
+}
+
+document.addEventListener("mousemove", event => {
+    mouseX = event.clientX;
+    mouseY = event.clientY;
+
+    const cursor = document.getElementById(
+        "nikolas-v514-mouse"
+    );
+
+    if (!cursor) return;
+
+    cursor.style.left = `${mouseX}px`;
+    cursor.style.top = `${mouseY}px`;
+}, true);
+
+function setCursorStatus(type) {
+    const cursor = createCursor();
+
+    const path = cursor.querySelector(
+        "#nikolas-cursor-path"
+    );
+
+    if (!path) return;
+
+    cursor.style.opacity = "1";
+
+    if (type === "loading") {
+
+        path.setAttribute(
+            "stroke",
+            "#00ffff"
         );
 
-        if (cursor) return cursor;
-
-        cursor = document.createElement("div");
-        cursor.id = "nikolas-v514-cursor";
-
-        document.body.appendChild(cursor);
-
-        return cursor;
-    }
-
-    function updateCursorPosition() {
-        const cursor = document.getElementById(
-            "nikolas-v514-cursor"
+        path.setAttribute(
+            "fill",
+            "#06151b"
         );
 
-        if (!cursor) return;
+        cursor.style.filter =
+            "drop-shadow(0 0 5px #00ffff) " +
+            "drop-shadow(0 0 14px #00ffff)";
 
-        cursor.style.left = `${mouseX}px`;
-        cursor.style.top = `${mouseY}px`;
-    }
+    } else if (type === "success") {
 
-    document.addEventListener("mousemove", event => {
-        mouseX = event.clientX;
-        mouseY = event.clientY;
-
-        updateCursorPosition();
-    }, true);
-
-    function setCursorStatus(type) {
-        const cursor = createCursor();
-
-        cursor.classList.remove(
-            "loading",
-            "success",
-            "error"
+        path.setAttribute(
+            "stroke",
+            "#00ff88"
         );
 
-        if (type === "loading") {
-            cursor.classList.add("loading");
-        }
+        path.setAttribute(
+            "fill",
+            "#062015"
+        );
 
-        if (type === "success") {
-            cursor.classList.add("success");
-        }
+        cursor.style.filter =
+            "drop-shadow(0 0 5px #00ff88) " +
+            "drop-shadow(0 0 14px #00ff88)";
 
-        if (type === "error") {
-            cursor.classList.add("error");
-        }
+    } else if (type === "error") {
 
-        updateCursorPosition();
+        path.setAttribute(
+            "stroke",
+            "#ff3355"
+        );
+
+        path.setAttribute(
+            "fill",
+            "#20060d"
+        );
+
+        cursor.style.filter =
+            "drop-shadow(0 0 5px #ff3355) " +
+            "drop-shadow(0 0 14px #ff3355)";
+
+    } else {
+
+        cursor.style.opacity = "0";
     }
+}
 
     // =========================================================
     // UTILITÁRIOS
