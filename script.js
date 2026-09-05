@@ -1,6 +1,6 @@
 // ==UserScript==
-// @name         Nikolas Quizizz v51.4 - Study Mode
-// @version      51.4
+// @name         Nikolas Quizizz v51.5 - Study Mode
+// @version      51.5
 // @description  Assistente de estudo visual para Wayground/Quizizz
 // @author       Nikolas
 // @match        https://wayground.com/join/game/*
@@ -29,10 +29,16 @@
     let busy = false;
 
     // =========================================================
-    // ESTILO VISUAL
+    // IDs
     // =========================================================
 
-    const STYLE_ID = "nikolas-v514-style";
+    const STYLE_ID = "nikolas-v515-style";
+    const CURSOR_ID = "nikolas-v515-cursor";
+    const RESULT_ID = "nikolas-v515-result";
+
+    // =========================================================
+    // ESTILO
+    // =========================================================
 
     function injectStyle() {
         if (document.getElementById(STYLE_ID)) return;
@@ -41,113 +47,301 @@
         style.id = STYLE_ID;
 
         style.textContent = `
-            #nikolas-v514-cursor {
+            /*
+             * CURSOR REALMENTE SUBSTITUÍDO
+             */
+
+            html.nikolas-v515-custom-cursor,
+            html.nikolas-v515-custom-cursor *,
+            html.nikolas-v515-custom-cursor button,
+            html.nikolas-v515-custom-cursor a,
+            html.nikolas-v515-custom-cursor input,
+            html.nikolas-v515-custom-cursor textarea,
+            html.nikolas-v515-custom-cursor select {
+                cursor: none !important;
+            }
+
+            #${CURSOR_ID} {
                 position: fixed;
-                width: 18px;
-                height: 18px;
-                border-radius: 50%;
+                left: 0;
+                top: 0;
+
+                width: 32px;
+                height: 40px;
+
                 pointer-events: none;
+                user-select: none;
+
                 z-index: 2147483647;
-                transform: translate(-50%, -50%);
+
                 opacity: 0;
+
+                transform:
+                    translate3d(
+                        0,
+                        0,
+                        0
+                    );
+
                 transition:
-                    width .15s ease,
-                    height .15s ease,
                     opacity .15s ease,
-                    background .2s ease,
-                    border-color .2s ease,
-                    box-shadow .2s ease;
+                    filter .2s ease;
             }
 
-            #nikolas-v514-cursor.loading {
-                width: 20px;
-                height: 20px;
+            #${CURSOR_ID} svg {
+                width: 32px;
+                height: 40px;
+
+                display: block;
+
+                overflow: visible;
+
+                transition:
+                    transform .18s ease,
+                    filter .2s ease;
+            }
+
+            #${CURSOR_ID}.visible {
                 opacity: 1;
-                background: rgba(0,255,255,.15);
-                border: 2px solid #00ffff;
-                box-shadow:
-                    0 0 8px #00ffff,
-                    0 0 18px #00ffff,
-                    0 0 35px rgba(0,255,255,.7);
-                animation: nikolasPulse 1s infinite;
             }
 
-            #nikolas-v514-cursor.success {
-                width: 23px;
-                height: 23px;
-                opacity: 1;
-                background: #00ff88;
-                border: 2px solid #00ff88;
-                box-shadow:
-                    0 0 10px #00ff88,
-                    0 0 25px #00ff88,
-                    0 0 45px rgba(0,255,136,.7);
+            /*
+             * CURSOR NORMAL
+             */
+
+            #${CURSOR_ID}.normal svg {
+                filter:
+                    drop-shadow(0 0 3px rgba(0,255,255,.65))
+                    drop-shadow(0 0 8px rgba(0,255,255,.25));
             }
 
-            #nikolas-v514-cursor.error {
-                width: 23px;
-                height: 23px;
-                opacity: 1;
-                background: #ff3355;
-                border: 2px solid #ff3355;
-                box-shadow:
-                    0 0 10px #ff3355,
-                    0 0 25px #ff3355,
-                    0 0 45px rgba(255,51,85,.7);
+            /*
+             * CARREGANDO
+             */
+
+            #${CURSOR_ID}.loading svg {
+                transform: scale(1.08);
+                filter:
+                    drop-shadow(0 0 5px #00ffff)
+                    drop-shadow(0 0 13px #00ffff)
+                    drop-shadow(0 0 25px rgba(0,255,255,.55));
             }
 
-            #nikolas-v514-cursor::after {
-                content: "";
-                position: absolute;
-                inset: -8px;
-                border-radius: 50%;
-                border: 1px solid currentColor;
+            #${CURSOR_ID}.loading .cursor-arrow {
                 opacity: .35;
             }
 
-            #nikolas-v514-cursor.loading::after {
-                animation: nikolasSpin 1.2s linear infinite;
+            #${CURSOR_ID}.loading .cursor-loader {
+                opacity: 1;
+                animation:
+                    nikolasCursorSpin
+                    .8s linear infinite;
+                transform-origin: 16px 20px;
             }
 
-            #nikolas-v514-result {
-                animation: nikolasResultIn .22s ease-out;
+            /*
+             * SUCESSO
+             */
+
+            #${CURSOR_ID}.success svg {
+                transform: scale(1.12);
+                filter:
+                    drop-shadow(0 0 5px #00ff88)
+                    drop-shadow(0 0 14px #00ff88)
+                    drop-shadow(0 0 28px rgba(0,255,136,.6));
             }
 
-            #nikolas-v514-result::-webkit-scrollbar {
+            #${CURSOR_ID}.success .cursor-check {
+                opacity: 1;
+                animation:
+                    nikolasCheck
+                    .35s ease-out;
+            }
+
+            /*
+             * ERRO
+             */
+
+            #${CURSOR_ID}.error svg {
+                transform: scale(1.12);
+                filter:
+                    drop-shadow(0 0 5px #ff3355)
+                    drop-shadow(0 0 14px #ff3355)
+                    drop-shadow(0 0 28px rgba(255,51,85,.6));
+            }
+
+            #${CURSOR_ID}.error .cursor-error {
+                opacity: 1;
+                animation:
+                    nikolasError
+                    .35s ease-out;
+            }
+
+            /*
+             * RESULTADO
+             */
+
+            #${RESULT_ID} {
+                position: fixed;
+
+                left: 50%;
+                bottom: 34px;
+
+                transform:
+                    translateX(-50%)
+                    translateY(15px);
+
+                width:
+                    min(520px, calc(100vw - 40px));
+
+                box-sizing: border-box;
+
+                padding: 15px 18px;
+
+                border-radius: 14px;
+
+                background:
+                    linear-gradient(
+                        135deg,
+                        rgba(8,14,21,.97),
+                        rgba(10,22,29,.96)
+                    );
+
+                border:
+                    1px solid rgba(0,255,255,.35);
+
+                box-shadow:
+                    0 8px 35px rgba(0,0,0,.35),
+                    0 0 25px rgba(0,255,255,.08);
+
+                color: #fff;
+
+                font-family:
+                    Inter,
+                    Poppins,
+                    Arial,
+                    sans-serif;
+
+                z-index: 2147483646;
+
+                opacity: 0;
+
+                animation:
+                    nikolasResultIn
+                    .25s ease-out
+                    forwards;
+            }
+
+            #${RESULT_ID}.success {
+                border-color:
+                    rgba(0,255,136,.42);
+
+                box-shadow:
+                    0 8px 35px rgba(0,0,0,.35),
+                    0 0 25px rgba(0,255,136,.08);
+            }
+
+            #${RESULT_ID}.error {
+                border-color:
+                    rgba(255,51,85,.45);
+
+                box-shadow:
+                    0 8px 35px rgba(0,0,0,.35),
+                    0 0 25px rgba(255,51,85,.08);
+            }
+
+            .nikolas-result-header {
+                display: flex;
+                align-items: center;
+                gap: 9px;
+
+                margin-bottom: 7px;
+
+                font-size: 11px;
+                font-weight: 700;
+
+                letter-spacing: .12em;
+                text-transform: uppercase;
+
+                opacity: .7;
+            }
+
+            .nikolas-result-dot {
                 width: 7px;
+                height: 7px;
+
+                border-radius: 50%;
+
+                background: #00ffff;
+
+                box-shadow:
+                    0 0 8px #00ffff;
             }
 
-            #nikolas-v514-result::-webkit-scrollbar-thumb {
-                background: rgba(0,255,255,.35);
-                border-radius: 10px;
+            .nikolas-result-text {
+                font-size: 15px;
+                line-height: 1.45;
+                font-weight: 600;
             }
 
-            @keyframes nikolasPulse {
-                0%, 100% {
-                    transform: translate(-50%, -50%) scale(1);
-                }
-                50% {
-                    transform: translate(-50%, -50%) scale(1.25);
-                }
+            .nikolas-result-hint {
+                margin-top: 7px;
+
+                font-size: 11px;
+
+                color:
+                    rgba(255,255,255,.48);
             }
 
-            @keyframes nikolasSpin {
+            @keyframes nikolasCursorSpin {
                 from {
                     transform: rotate(0deg);
                 }
+
                 to {
                     transform: rotate(360deg);
+                }
+            }
+
+            @keyframes nikolasCheck {
+                from {
+                    opacity: 0;
+                    transform: scale(.5);
+                }
+
+                to {
+                    opacity: 1;
+                    transform: scale(1);
+                }
+            }
+
+            @keyframes nikolasError {
+                0%, 100% {
+                    transform: translateX(0);
+                }
+
+                25% {
+                    transform: translateX(-3px);
+                }
+
+                75% {
+                    transform: translateX(3px);
                 }
             }
 
             @keyframes nikolasResultIn {
                 from {
                     opacity: 0;
-                    transform: translate(-50%, -47%) scale(.97);
+                    transform:
+                        translateX(-50%)
+                        translateY(15px);
                 }
+
                 to {
                     opacity: 1;
-                    transform: translate(-50%, -50%) scale(1);
+                    transform:
+                        translateX(-50%)
+                        translateY(0);
                 }
             }
         `;
@@ -156,150 +350,186 @@
     }
 
     // =========================================================
-// CURSOR DE MOUSE NEON
-// =========================================================
+    // CURSOR CUSTOMIZADO
+    // =========================================================
 
-let mouseX = 0;
-let mouseY = 0;
+    let mouseX = 0;
+    let mouseY = 0;
 
-function createCursor() {
-    let cursor = document.getElementById(
-        "nikolas-v514-mouse"
-    );
+    function createCursor() {
+        let cursor =
+            document.getElementById(CURSOR_ID);
 
-    if (cursor) return cursor;
+        if (cursor) return cursor;
 
-    cursor = document.createElement("div");
-    cursor.id = "nikolas-v514-mouse";
+        cursor =
+            document.createElement("div");
 
-    Object.assign(cursor.style, {
-        position: "fixed",
-        left: "0px",
-        top: "0px",
-        width: "0",
-        height: "0",
-        zIndex: "2147483647",
-        pointerEvents: "none",
-        opacity: "0",
-        transform: "translate(-2px, -2px)"
-    });
+        cursor.id = CURSOR_ID;
 
-    // Desenho de seta de mouse
-    cursor.innerHTML = `
-        <svg
-            width="30"
-            height="38"
-            viewBox="0 0 30 38"
-            xmlns="http://www.w3.org/2000/svg"
-            style="
-                overflow:visible;
-                display:block;
-                filter:
-                    drop-shadow(0 0 3px #00ffff)
-                    drop-shadow(0 0 8px #00ffff);
-            "
-        >
-            <path
-                id="nikolas-cursor-path"
-                d="M3 2 L3 30 L10 23 L16 36 L21 33 L15 21 L26 21 Z"
-                fill="#06151b"
-                stroke="#00ffff"
-                stroke-width="2"
-                stroke-linejoin="round"
-            />
-        </svg>
-    `;
+        cursor.innerHTML = `
+            <svg
+                viewBox="0 0 32 40"
+                xmlns="http://www.w3.org/2000/svg"
+            >
 
-    document.body.appendChild(cursor);
+                <!-- Seta principal -->
+                <path
+                    class="cursor-arrow"
+                    d="
+                        M3 2
+                        L3 29
+                        L10 22
+                        L16 36
+                        L21 33
+                        L15 20
+                        L27 20
+                        Z
+                    "
+                    fill="#07151c"
+                    stroke="#00ffff"
+                    stroke-width="1.8"
+                    stroke-linejoin="round"
+                />
 
-    return cursor;
-}
+                <!-- Anel de carregamento -->
+                <circle
+                    class="cursor-loader"
+                    cx="16"
+                    cy="20"
+                    r="12"
+                    fill="none"
+                    stroke="#00ffff"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-dasharray="8 6"
+                    opacity="0"
+                />
 
-document.addEventListener("mousemove", event => {
-    mouseX = event.clientX;
-    mouseY = event.clientY;
+                <!-- Check -->
+                <path
+                    class="cursor-check"
+                    d="M8 19 L13 24 L23 13"
+                    fill="none"
+                    stroke="#00ff88"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    opacity="0"
+                />
 
-    const cursor = document.getElementById(
-        "nikolas-v514-mouse"
-    );
+                <!-- X -->
+                <path
+                    class="cursor-error"
+                    d="M10 14 L22 26 M22 14 L10 26"
+                    fill="none"
+                    stroke="#ff3355"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                    opacity="0"
+                />
 
-    if (!cursor) return;
+            </svg>
+        `;
 
-    cursor.style.left = `${mouseX}px`;
-    cursor.style.top = `${mouseY}px`;
-}, true);
+        document.body.appendChild(cursor);
 
-function setCursorStatus(type) {
-    const cursor = createCursor();
-
-    const path = cursor.querySelector(
-        "#nikolas-cursor-path"
-    );
-
-    if (!path) return;
-
-    cursor.style.opacity = "1";
-
-    if (type === "loading") {
-
-        path.setAttribute(
-            "stroke",
-            "#00ffff"
-        );
-
-        path.setAttribute(
-            "fill",
-            "#06151b"
-        );
-
-        cursor.style.filter =
-            "drop-shadow(0 0 5px #00ffff) " +
-            "drop-shadow(0 0 14px #00ffff)";
-
-    } else if (type === "success") {
-
-        path.setAttribute(
-            "stroke",
-            "#00ff88"
-        );
-
-        path.setAttribute(
-            "fill",
-            "#062015"
-        );
-
-        cursor.style.filter =
-            "drop-shadow(0 0 5px #00ff88) " +
-            "drop-shadow(0 0 14px #00ff88)";
-
-    } else if (type === "error") {
-
-        path.setAttribute(
-            "stroke",
-            "#ff3355"
-        );
-
-        path.setAttribute(
-            "fill",
-            "#20060d"
-        );
-
-        cursor.style.filter =
-            "drop-shadow(0 0 5px #ff3355) " +
-            "drop-shadow(0 0 14px #ff3355)";
-
-    } else {
-
-        cursor.style.opacity = "0";
+        return cursor;
     }
-}
+
+    function moveCursor() {
+        const cursor =
+            document.getElementById(CURSOR_ID);
+
+        if (!cursor) return;
+
+        cursor.style.transform =
+            `translate3d(
+                ${mouseX + 1}px,
+                ${mouseY + 1}px,
+                0
+            )`;
+    }
+
+    document.addEventListener(
+        "mousemove",
+        event => {
+            mouseX = event.clientX;
+            mouseY = event.clientY;
+
+            moveCursor();
+        },
+        true
+    );
+
+    function setCursorStatus(type) {
+        const cursor =
+            createCursor();
+
+        cursor.classList.remove(
+            "normal",
+            "loading",
+            "success",
+            "error"
+        );
+
+        if (type === "normal") {
+            cursor.classList.add(
+                "normal",
+                "visible"
+            );
+            return;
+        }
+
+        cursor.classList.add(
+            type,
+            "visible"
+        );
+    }
+
+    function enableCustomCursor() {
+        document.documentElement
+            .classList
+            .add(
+                "nikolas-v515-custom-cursor"
+            );
+
+        const cursor =
+            createCursor();
+
+        cursor.classList.add(
+            "normal",
+            "visible"
+        );
+    }
+
+    function disableCustomCursor() {
+        document.documentElement
+            .classList
+            .remove(
+                "nikolas-v515-custom-cursor"
+            );
+
+        const cursor =
+            document.getElementById(
+                CURSOR_ID
+            );
+
+        if (cursor) {
+            cursor.classList.remove(
+                "visible"
+            );
+        }
+    }
 
     // =========================================================
     // UTILITÁRIOS
     // =========================================================
 
     const sleep = ms =>
-        new Promise(resolve => setTimeout(resolve, ms));
+        new Promise(resolve =>
+            setTimeout(resolve, ms)
+        );
 
     function cleanText(text) {
         return String(text || "")
@@ -319,38 +549,50 @@ function setCursorStatus(type) {
         options,
         timeout = REQUEST_TIMEOUT
     ) {
-        return new Promise((resolve, reject) => {
-            const controller = new AbortController();
+        return new Promise(
+            (resolve, reject) => {
 
-            const timer = setTimeout(() => {
-                controller.abort();
-                reject(
-                    new Error("Timeout na requisição.")
-                );
-            }, timeout);
+                const controller =
+                    new AbortController();
 
-            fetch(url, {
-                ...options,
-                signal: controller.signal
-            })
-                .then(response => {
-                    clearTimeout(timer);
-                    resolve(response);
-                })
-                .catch(error => {
-                    clearTimeout(timer);
+                const timer =
+                    setTimeout(() => {
+                        controller.abort();
 
-                    if (error.name === "AbortError") {
                         reject(
                             new Error(
                                 "Timeout na requisição."
                             )
                         );
-                    } else {
-                        reject(error);
-                    }
-                });
-        });
+                    }, timeout);
+
+                fetch(url, {
+                    ...options,
+                    signal:
+                        controller.signal
+                })
+                    .then(response => {
+                        clearTimeout(timer);
+                        resolve(response);
+                    })
+                    .catch(error => {
+                        clearTimeout(timer);
+
+                        if (
+                            error.name ===
+                            "AbortError"
+                        ) {
+                            reject(
+                                new Error(
+                                    "Timeout na requisição."
+                                )
+                            );
+                        } else {
+                            reject(error);
+                        }
+                    });
+            }
+        );
     }
 
     // =========================================================
@@ -360,42 +602,48 @@ function setCursorStatus(type) {
     function getBodyLines() {
         return document.body.innerText
             .split("\n")
-            .map(x => cleanText(x))
+            .map(cleanText)
             .filter(Boolean);
     }
 
     function extractActivityQuestion() {
-        const lines = getBodyLines();
+        const lines =
+            getBodyLines();
 
-        const ignored = new Set([
-            "Eliminador de Respostas",
-            "Leitor de linha",
-            "Marca texto",
-            "Configurações",
-            "Tela cheia",
-            "Próximo"
-        ]);
+        const ignored =
+            new Set([
+                "Eliminador de Respostas",
+                "Leitor de linha",
+                "Marca texto",
+                "Configurações",
+                "Tela cheia",
+                "Próximo"
+            ]);
 
-        const cleaned = lines.filter(
-            x => !ignored.has(x)
-        );
+        const cleaned =
+            lines.filter(
+                x => !ignored.has(x)
+            );
 
-        let start = cleaned.findIndex(x =>
-            /^Question text:$/i.test(x) ||
-            /^Texto da questão:$/i.test(x)
-        );
+        let start =
+            cleaned.findIndex(x =>
+                /^Question text:$/i.test(x) ||
+                /^Texto da questão:$/i.test(x)
+            );
 
         if (start === -1) {
-            start = cleaned.findIndex(x =>
-                x.toLowerCase().includes(
-                    "question text:"
-                )
-            );
+            start =
+                cleaned.findIndex(x =>
+                    x.toLowerCase()
+                        .includes(
+                            "question text:"
+                        )
+                );
         }
 
         if (start === -1) {
             console.warn(
-                "[Nikolas v51.4] Não encontrei Question text."
+                "[Nikolas v51.5] Não encontrei Question text."
             );
 
             return null;
@@ -407,38 +655,46 @@ function setCursorStatus(type) {
         let i = start + 1;
 
         while (i < cleaned.length) {
-            const line = cleaned[i];
+            const line =
+                cleaned[i];
 
             if (/^[A-H]$/.test(line)) {
                 break;
             }
 
             if (
-                /^Questão \d+ de \d+$/i.test(line) ||
-                /^Question \d+ of \d+$/i.test(line)
+                /^Questão \d+ de \d+$/i
+                    .test(line) ||
+                /^Question \d+ of \d+$/i
+                    .test(line)
             ) {
                 break;
             }
 
             questionLines.push(line);
+
             i++;
         }
 
         while (i < cleaned.length) {
-            const letter = cleaned[i];
+            const letter =
+                cleaned[i];
 
             if (!/^[A-H]$/.test(letter)) {
                 i++;
                 continue;
             }
 
-            const next = cleaned[i + 1];
+            const next =
+                cleaned[i + 1];
 
             if (
                 !next ||
                 /^[A-H]$/.test(next) ||
-                /^Questão \d+ de \d+$/i.test(next) ||
-                /^Question \d+ of \d+$/i.test(next)
+                /^Questão \d+ de \d+$/i
+                    .test(next) ||
+                /^Question \d+ of \d+$/i
+                    .test(next)
             ) {
                 i++;
                 continue;
@@ -456,21 +712,22 @@ function setCursorStatus(type) {
             }
         }
 
-        const questionText = cleanText(
-            questionLines.join(" ")
-        );
+        const questionText =
+            cleanText(
+                questionLines.join(" ")
+            );
 
         if (!questionText) {
             return null;
         }
 
         console.log(
-            "[Nikolas v51.4] Questão:",
+            "[Nikolas v51.5] Questão:",
             questionText
         );
 
         console.log(
-            "[Nikolas v51.4] Opções:",
+            "[Nikolas v51.5] Opções:",
             options
         );
 
@@ -486,12 +743,16 @@ function setCursorStatus(type) {
 
     function extractTraditionalQuestion() {
         const el =
-            document.querySelector("#questionText");
+            document.querySelector(
+                "#questionText"
+            );
 
         if (!el) return null;
 
         const questionText =
-            cleanText(el.innerText);
+            cleanText(
+                el.innerText
+            );
 
         const optionElements =
             document.querySelectorAll(
@@ -502,23 +763,28 @@ function setCursorStatus(type) {
             Array.from(optionElements)
                 .map((el, index) => ({
                     letter:
-                        String.fromCharCode(65 + index),
+                        String.fromCharCode(
+                            65 + index
+                        ),
 
-                    text: cleanText(
-                        el.querySelector(
-                            "#optionText"
-                        )?.innerText ||
-                        el.innerText
-                    )
+                    text:
+                        cleanText(
+                            el.querySelector(
+                                "#optionText"
+                            )?.innerText ||
+                            el.innerText
+                        )
                 }))
-                .filter(x => x.text);
+                .filter(
+                    x => x.text
+                );
 
         if (!questionText) {
             return null;
         }
 
         console.log(
-            "[Nikolas v51.4] Layout tradicional detectado."
+            "[Nikolas v51.5] Layout tradicional detectado."
         );
 
         return {
@@ -540,7 +806,7 @@ function setCursorStatus(type) {
 
         if (activity) {
             console.log(
-                "[Nikolas v51.4] Layout de atividade detectado."
+                "[Nikolas v51.5] Layout de atividade detectado."
             );
 
             return activity;
@@ -550,33 +816,46 @@ function setCursorStatus(type) {
     }
 
     // =========================================================
-    // GEMINI
+    // PROMPT — MODO ESTUDO
     // =========================================================
 
     function buildPrompt(data) {
-        const optionsText = data.options.length
-            ? data.options
-                .map(o =>
-                    `${o.letter}) ${o.text}`
-                )
-                .join("\n")
-            : "Não foram detectadas alternativas.";
+        const optionsText =
+            data.options.length
+                ? data.options
+                    .map(o =>
+                        `${o.letter}) ${o.text}`
+                    )
+                    .join("\n")
+                : "Não foram detectadas alternativas.";
 
         return `
 Você é um tutor de estudos.
 
-Ajude o estudante a ENTENDER como resolver a questão.
+Analise a questão abaixo e ajude o estudante
+a compreender o conteúdo e o raciocínio necessário.
 
-REGRAS:
-- Não informe a letra da alternativa correta.
-- Não diga "a resposta é A/B/C/D".
-- Não copie uma alternativa como resposta.
-- Explique o conceito necessário.
-- Mostre um raciocínio curto e claro.
-- Em português/inglês, explique a regra gramatical.
-- Em matemática, explique o método e as contas.
-- Em história/geografia/etc., explique o conceito.
-- Termine com uma dica para o estudante decidir sozinho.
+IMPORTANTE:
+- Não informe a letra de uma alternativa.
+- Não diga "A resposta é A/B/C/D".
+- Não selecione ou indique diretamente uma alternativa.
+- Explique o conceito necessário para resolver.
+- Mostre o raciocínio de forma clara.
+- Se houver cálculo, mostre o método e as contas.
+- Se for português ou inglês, explique a regra.
+- Se for história/geografia/ciências, explique o conceito.
+- Termine com uma dica curta para o estudante.
+
+FORMATO OBRIGATÓRIO:
+
+CONCLUSÃO CURTA:
+[uma frase curta sobre o conceito/resultado que o estudante deve entender]
+
+EXPLICAÇÃO:
+[explicação detalhada]
+
+DICA:
+[uma dica curta]
 
 QUESTÃO:
 ${data.questionText}
@@ -586,8 +865,13 @@ ${optionsText}
 `;
     }
 
+    // =========================================================
+    // GEMINI
+    // =========================================================
+
     async function askGemini(data) {
-        const prompt = buildPrompt(data);
+        const prompt =
+            buildPrompt(data);
 
         let lastError = null;
 
@@ -599,11 +883,15 @@ ${optionsText}
 
         for (
             let keyAttempt = 0;
-            keyAttempt < GEMINI_API_KEYS.length;
+            keyAttempt <
+            GEMINI_API_KEYS.length;
             keyAttempt++
         ) {
             const index =
-                (currentKeyIndex + keyAttempt) %
+                (
+                    currentKeyIndex +
+                    keyAttempt
+                ) %
                 GEMINI_API_KEYS.length;
 
             const key =
@@ -611,7 +899,7 @@ ${optionsText}
 
             if (!validKey(key)) {
                 console.warn(
-                    `[Nikolas v51.4] Chave #${index + 1} inválida.`
+                    `[Nikolas v51.5] Chave #${index + 1} inválida.`
                 );
 
                 continue;
@@ -622,12 +910,13 @@ ${optionsText}
 
             for (
                 let retry = 0;
-                retry <= MAX_RETRIES_PER_KEY;
+                retry <=
+                MAX_RETRIES_PER_KEY;
                 retry++
             ) {
                 try {
                     console.log(
-                        `[Nikolas v51.4] Gemini chave #${index + 1}, tentativa ${retry + 1}`
+                        `[Nikolas v51.5] Gemini chave #${index + 1}, tentativa ${retry + 1}`
                     );
 
                     const response =
@@ -641,18 +930,23 @@ ${optionsText}
                                         "application/json"
                                 },
 
-                                body: JSON.stringify({
-                                    contents: [{
-                                        parts: [{
-                                            text: prompt
-                                        }]
-                                    }],
+                                body:
+                                    JSON.stringify({
+                                        contents: [{
+                                            parts: [{
+                                                text:
+                                                    prompt
+                                            }]
+                                        }],
 
-                                    generationConfig: {
-                                        temperature: 0.2,
-                                        maxOutputTokens: 700
-                                    }
-                                })
+                                        generationConfig: {
+                                            temperature:
+                                                0.2,
+
+                                            maxOutputTokens:
+                                                900
+                                        }
+                                    })
                             }
                         );
 
@@ -664,17 +958,20 @@ ${optionsText}
                             json
                                 ?.candidates?.[0]
                                 ?.content?.parts
-                                ?.map(p =>
-                                    p.text || ""
+                                ?.map(
+                                    p =>
+                                        p.text ||
+                                        ""
                                 )
                                 .join("")
                                 .trim();
 
                         if (text) {
-                            currentKeyIndex = index;
+                            currentKeyIndex =
+                                index;
 
                             console.log(
-                                "[Nikolas v51.4] Gemini respondeu."
+                                "[Nikolas v51.5] Gemini respondeu."
                             );
 
                             return text;
@@ -696,38 +993,48 @@ ${optionsText}
                             errorJson
                                 ?.error?.message ||
                             errorMessage;
+
                     } catch (_) {}
 
                     lastError =
-                        new Error(errorMessage);
+                        new Error(
+                            errorMessage
+                        );
 
                     console.warn(
-                        `[Nikolas v51.4] Gemini #${index + 1}: ${errorMessage}`
+                        `[Nikolas v51.5] Gemini #${index + 1}: ${errorMessage}`
                     );
 
-                    const retryable = [
-                        429,
-                        500,
-                        502,
-                        503,
-                        504
-                    ].includes(
-                        response.status
-                    );
+                    const retryable =
+                        [
+                            429,
+                            500,
+                            502,
+                            503,
+                            504
+                        ].includes(
+                            response.status
+                        );
 
                     if (
                         retryable &&
-                        retry < MAX_RETRIES_PER_KEY
+                        retry <
+                            MAX_RETRIES_PER_KEY
                     ) {
                         const delay =
                             2500 *
-                            Math.pow(2, retry);
+                            Math.pow(
+                                2,
+                                retry
+                            );
 
                         console.log(
-                            `[Nikolas v51.4] Retry em ${delay}ms`
+                            `[Nikolas v51.5] Retry em ${delay}ms`
                         );
 
-                        await sleep(delay);
+                        await sleep(
+                            delay
+                        );
 
                         continue;
                     }
@@ -735,53 +1042,166 @@ ${optionsText}
                     break;
 
                 } catch (error) {
-                    lastError = error;
+                    lastError =
+                        error;
 
                     console.warn(
-                        `[Nikolas v51.4] Erro Gemini #${index + 1}:`,
+                        `[Nikolas v51.5] Erro Gemini #${index + 1}:`,
                         error.message
                     );
 
                     const temporary =
                         /timeout|network|fetch/i
-                            .test(error.message);
+                            .test(
+                                error.message
+                            );
 
                     if (
                         temporary &&
-                        retry < MAX_RETRIES_PER_KEY
+                        retry <
+                            MAX_RETRIES_PER_KEY
                     ) {
                         const delay =
                             2500 *
-                            Math.pow(2, retry);
+                            Math.pow(
+                                2,
+                                retry
+                            );
 
                         console.log(
-                            `[Nikolas v51.4] Nova tentativa em ${delay}ms`
+                            `[Nikolas v51.5] Nova tentativa em ${delay}ms`
                         );
 
-                        await sleep(delay);
+                        await sleep(
+                            delay
+                        );
                     }
                 }
             }
 
             console.warn(
-                `[Nikolas v51.4] Tentando próxima chave...`
+                "[Nikolas v51.5] Tentando próxima chave..."
             );
         }
 
-        throw lastError ||
+        throw (
+            lastError ||
             new Error(
                 "Todas as chaves Gemini falharam."
-            );
+            )
+        );
     }
 
     // =========================================================
-    // RESULTADO
+    // SEPARAR CONCLUSÃO DA EXPLICAÇÃO
     // =========================================================
 
-    function showResult(text) {
+    function parseAIResponse(text) {
+        const clean =
+            String(text || "")
+                .trim();
+
+        let conclusion = "";
+
+        const match =
+            clean.match(
+                /CONCLUSÃO CURTA:\s*([\s\S]*?)(?=\n\s*(?:EXPLICAÇÃO|EXPLICACAO):)/i
+            );
+
+        if (match) {
+            conclusion =
+                cleanText(
+                    match[1]
+                );
+        }
+
+        if (!conclusion) {
+            const firstLine =
+                clean
+                    .split("\n")
+                    .map(cleanText)
+                    .find(Boolean);
+
+            conclusion =
+                firstLine ||
+                "Análise concluída.";
+        }
+
+        return {
+            conclusion,
+            fullText: clean
+        };
+    }
+
+    // =========================================================
+    // CONSOLE PROFISSIONAL
+    // =========================================================
+
+    function printConsoleExplanation(
+        data,
+        aiText
+    ) {
+        console.clear();
+
+        console.log(
+            "%c NIKOLAS SCRIPTS ",
+            `
+                background:#06151c;
+                color:#00ffff;
+                font-size:16px;
+                font-weight:bold;
+                padding:6px 12px;
+                border:1px solid #00ffff;
+                border-radius:6px;
+            `
+        );
+
+        console.log("");
+
+        console.log(
+            "%cQUESTÃO",
+            "color:#00ffff;font-weight:bold;font-size:13px;"
+        );
+
+        console.log(
+            data.questionText
+        );
+
+        console.log("");
+
+        console.log(
+            "%cEXPLICAÇÃO DETALHADA",
+            "color:#00ff88;font-weight:bold;font-size:13px;"
+        );
+
+        console.log(
+            aiText
+        );
+
+        console.log("");
+
+        console.log(
+            "%c────────────────────────────────────────",
+            "color:#555;"
+        );
+
+        console.log(
+            "%cNikolas Scripts • Study Mode",
+            "color:#888;font-size:11px;"
+        );
+    }
+
+    // =========================================================
+    // RESULTADO PEQUENO NA TELA
+    // =========================================================
+
+    function showResult(
+        conclusion,
+        success = true
+    ) {
         const old =
             document.getElementById(
-                "nikolas-v514-result"
+                RESULT_ID
             );
 
         if (old) {
@@ -789,113 +1209,97 @@ ${optionsText}
         }
 
         const box =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
 
         box.id =
-            "nikolas-v514-result";
+            RESULT_ID;
 
-        Object.assign(box.style, {
-            position: "fixed",
-            top: "50%",
-            left: "50%",
-            transform:
-                "translate(-50%, -50%)",
+        box.className =
+            success
+                ? "success"
+                : "error";
 
-            width:
-                "min(650px, 85vw)",
+        const header =
+            document.createElement(
+                "div"
+            );
 
-            maxHeight: "70vh",
-            overflowY: "auto",
+        header.className =
+            "nikolas-result-header";
 
-            padding: "24px",
+        const dot =
+            document.createElement(
+                "span"
+            );
 
-            borderRadius: "18px",
+        dot.className =
+            "nikolas-result-dot";
 
-            background:
-                "rgba(10,15,22,.97)",
+        const headerText =
+            document.createElement(
+                "span"
+            );
 
-            color: "white",
+        headerText.textContent =
+            success
+                ? "ANÁLISE CONCLUÍDA"
+                : "ERRO NA ANÁLISE";
 
-            zIndex: "2147483646",
+        header.appendChild(dot);
+        header.appendChild(
+            headerText
+        );
 
-            fontFamily:
-                "Inter, Arial, sans-serif",
+        const text =
+            document.createElement(
+                "div"
+            );
 
-            boxShadow:
-                "0 0 20px rgba(0,255,255,.25), 0 0 60px rgba(0,255,255,.08)",
+        text.className =
+            "nikolas-result-text";
 
-            border:
-                "1px solid rgba(0,255,255,.4)"
-        });
+        text.textContent =
+            conclusion;
 
-        const title =
-            document.createElement("div");
+        const hint =
+            document.createElement(
+                "div"
+            );
 
-        title.textContent =
-            "Nikolas Scripts - Resposta da IA";
+        hint.className =
+            "nikolas-result-hint";
 
-        Object.assign(title.style, {
-            fontSize: "20px",
-            fontWeight: "700",
-            marginBottom: "17px",
-            color: "#00ffff",
-            textShadow:
-                "0 0 10px rgba(0,255,255,.6)"
-        });
+        hint.textContent =
+            success
+                ? "Explicação detalhada disponível no console (F12)."
+                : "Veja o console (F12) para detalhes do erro.";
 
-        const content =
-            document.createElement("div");
+        box.appendChild(header);
+        box.appendChild(text);
+        box.appendChild(hint);
 
-        content.innerText = text;
+        document.body.appendChild(
+            box
+        );
 
-        Object.assign(content.style, {
-            whiteSpace: "pre-wrap",
-            lineHeight: "1.6",
-            fontSize: "15px"
-        });
+        setTimeout(() => {
+            if (box.isConnected) {
+                box.style.opacity =
+                    "0";
 
-        const close =
-            document.createElement("button");
+                box.style.transform =
+                    "translateX(-50%) translateY(8px)";
 
-        close.textContent = "Fechar";
+                box.style.transition =
+                    "opacity .25s ease, transform .25s ease";
 
-        Object.assign(close.style, {
-            marginTop: "20px",
-            padding: "10px 18px",
-            borderRadius: "9px",
-            border:
-                "1px solid rgba(0,255,255,.45)",
-            background:
-                "rgba(0,255,255,.08)",
-            color: "white",
-            cursor: "pointer",
-            fontWeight: "600"
-        });
-
-        close.onmouseenter = () => {
-            close.style.background =
-                "rgba(0,255,255,.18)";
-
-            close.style.boxShadow =
-                "0 0 15px rgba(0,255,255,.3)";
-        };
-
-        close.onmouseleave = () => {
-            close.style.background =
-                "rgba(0,255,255,.08)";
-
-            close.style.boxShadow =
-                "none";
-        };
-
-        close.onclick = () =>
-            box.remove();
-
-        box.appendChild(title);
-        box.appendChild(content);
-        box.appendChild(close);
-
-        document.body.appendChild(box);
+                setTimeout(() => {
+                    box.remove();
+                }, 280);
+            }
+        }, 6500);
     }
 
     // =========================================================
@@ -907,11 +1311,13 @@ ${optionsText}
 
         busy = true;
 
-        setCursorStatus("loading");
+        setCursorStatus(
+            "loading"
+        );
 
         try {
             console.log(
-                "%c[Nikolas v51.4] Iniciando análise...",
+                "%c[Nikolas v51.5] Iniciando análise...",
                 "color:#00ffff;font-weight:bold;"
             );
 
@@ -925,56 +1331,101 @@ ${optionsText}
             }
 
             console.log(
-                "[Nikolas v51.4] Questão detectada."
+                "[Nikolas v51.5] Questão detectada."
             );
 
             console.log(
-                "[Nikolas v51.4] Enviando para Gemini..."
+                "[Nikolas v51.5] Enviando para Gemini..."
             );
 
             const answer =
-                await askGemini(data);
+                await askGemini(
+                    data
+                );
 
-            showResult(answer);
+            const parsed =
+                parseAIResponse(
+                    answer
+                );
 
-            setCursorStatus("success");
+            /*
+             * Explicação completa somente no console.
+             */
+            printConsoleExplanation(
+                data,
+                parsed.fullText
+            );
+
+            /*
+             * Tela recebe somente
+             * a conclusão curta.
+             */
+            showResult(
+                parsed.conclusion,
+                true
+            );
+
+            setCursorStatus(
+                "success"
+            );
 
             console.log(
-                "%c[Nikolas v51.4] Concluído.",
+                "%c[Nikolas v51.5] Concluído.",
                 "color:#00ff88;font-weight:bold;"
             );
 
-            await sleep(1800);
+            await sleep(
+                1800
+            );
 
         } catch (error) {
+
             console.error(
-                "[Nikolas v51.4] ERRO:",
+                "[Nikolas v51.5] ERRO:",
                 error
             );
 
-            setCursorStatus("error");
+            showResult(
+                "Não foi possível concluir a análise.",
+                false
+            );
 
-            await sleep(1800);
+            setCursorStatus(
+                "error"
+            );
+
+            await sleep(
+                1800
+            );
 
         } finally {
-            setCursorStatus("normal");
+
+            setCursorStatus(
+                "normal"
+            );
+
             busy = false;
         }
     }
 
     // =========================================================
-    // TECLA ESPAÇO
+    // ESPAÇO
     // =========================================================
 
     document.addEventListener(
         "keydown",
         event => {
-            if (event.code !== "Space") {
+
+            if (
+                event.code !==
+                "Space"
+            ) {
                 return;
             }
 
             const tag =
-                document.activeElement?.tagName;
+                document.activeElement
+                    ?.tagName;
 
             if (
                 tag === "INPUT" ||
@@ -996,11 +1447,13 @@ ${optionsText}
     // =========================================================
 
     function init() {
+
         injectStyle();
-        createCursor();
+
+        enableCustomCursor();
 
         console.log(
-            "%c[Nikolas v51.4] Carregado!",
+            "%c[Nikolas v51.5] Carregado!",
             "color:#00ffff;font-size:14px;font-weight:bold;"
         );
 
@@ -1014,12 +1467,15 @@ ${optionsText}
         document.readyState ===
         "loading"
     ) {
+
         document.addEventListener(
             "DOMContentLoaded",
             init,
             { once: true }
         );
+
     } else {
+
         init();
     }
 
