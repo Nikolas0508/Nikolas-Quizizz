@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Nikolas Quizizz v51.7 - Resposta Completa
-// @version      51.7
-// @description  Mostra a resposta completa na tela e a resolução no console
+// @name         Nikolas Quizizz v51.8 - Resposta Completa
+// @version      51.8
+// @description  Mostra a resposta completa (ex: A - 4) e esconde o cursor enquanto a bolinha está ativa
 // @author       Nikolas
 // @match        https://wayground.com/join/game/*
 // @grant        none
@@ -27,9 +27,9 @@
     // =========================================================
     // IDs
     // =========================================================
-    const STYLE_ID = "nikolas-v517-style";
-    const BALL_ID = "nikolas-v517-ball";
-    const RESULT_ID = "nikolas-v517-result";
+    const STYLE_ID = "nikolas-v518-style";
+    const BALL_ID = "nikolas-v518-ball";
+    const RESULT_ID = "nikolas-v518-result";
 
     // =========================================================
     // ESTILO
@@ -40,7 +40,7 @@
         const style = document.createElement("style");
         style.id = STYLE_ID;
         style.textContent = `
-            /* Esconde o cursor enquanto a bolinha estiver ativa */
+            /* Força o cursor a sumir */
             html.nikolas-hide-cursor,
             html.nikolas-hide-cursor * {
                 cursor: none !important;
@@ -48,21 +48,20 @@
 
             #${BALL_ID} {
                 position: fixed;
-                width: 22px;
-                height: 22px;
+                width: 24px;
+                height: 24px;
                 border-radius: 50%;
                 pointer-events: none;
                 z-index: 2147483647;
                 opacity: 0;
-                transform: translate(-50%, -50%) scale(0.7);
-                transition: opacity .18s ease, transform .18s ease, background .2s ease, box-shadow .2s ease;
+                transform: translate(-50%, -50%) scale(0.6);
+                transition: opacity .15s ease, transform .15s ease;
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                font-size: 13px;
+                font-size: 14px;
                 font-weight: 700;
                 color: white;
-                box-shadow: 0 0 0 0 transparent;
             }
 
             #${BALL_ID}.visible {
@@ -72,54 +71,53 @@
 
             #${BALL_ID}.loading {
                 background: #00c8ff;
-                box-shadow: 0 0 12px #00c8ff, 0 0 24px rgba(0,200,255,.4);
-                animation: nikolasSpin 0.7s linear infinite;
+                box-shadow: 0 0 14px #00c8ff, 0 0 28px rgba(0,200,255,.5);
+                animation: nikolasSpin 0.65s linear infinite;
             }
 
             #${BALL_ID}.success {
                 background: #00d97e;
-                box-shadow: 0 0 12px #00d97e, 0 0 24px rgba(0,217,126,.45);
+                box-shadow: 0 0 14px #00d97e, 0 0 28px rgba(0,217,126,.5);
             }
 
             #${BALL_ID}.error {
                 background: #ff3355;
-                box-shadow: 0 0 12px #ff3355, 0 0 24px rgba(255,51,85,.45);
+                box-shadow: 0 0 14px #ff3355, 0 0 28px rgba(255,51,85,.5);
             }
 
             #${RESULT_ID} {
                 position: fixed;
                 left: 50%;
-                bottom: 34px;
-                transform: translateX(-50%) translateY(15px);
-                width: min(480px, calc(100vw - 40px));
+                bottom: 36px;
+                transform: translateX(-50%) translateY(12px);
+                width: min(500px, calc(100vw - 36px));
                 box-sizing: border-box;
                 padding: 16px 20px;
                 border-radius: 14px;
                 background: linear-gradient(135deg, rgba(8,14,21,.97), rgba(10,22,29,.96));
                 border: 1px solid rgba(0,255,136,.4);
-                box-shadow: 0 8px 35px rgba(0,0,0,.35), 0 0 25px rgba(0,255,136,.1);
+                box-shadow: 0 8px 32px rgba(0,0,0,.4), 0 0 20px rgba(0,255,136,.12);
                 color: #fff;
                 font-family: Inter, Poppins, Arial, sans-serif;
                 z-index: 2147483646;
                 opacity: 0;
-                animation: nikolasResultIn .25s ease-out forwards;
+                animation: nikolasResultIn .22s ease-out forwards;
             }
 
             #${RESULT_ID}.error {
                 border-color: rgba(255,51,85,.5);
-                box-shadow: 0 8px 35px rgba(0,0,0,.35), 0 0 25px rgba(255,51,85,.1);
             }
 
             .nikolas-result-header {
                 display: flex;
                 align-items: center;
-                gap: 9px;
+                gap: 8px;
                 margin-bottom: 6px;
                 font-size: 11px;
                 font-weight: 700;
-                letter-spacing: .12em;
+                letter-spacing: .1em;
                 text-transform: uppercase;
-                opacity: .7;
+                opacity: .65;
             }
 
             .nikolas-result-dot {
@@ -139,7 +137,7 @@
             .nikolas-result-hint {
                 margin-top: 8px;
                 font-size: 12px;
-                color: rgba(255,255,255,.5);
+                color: rgba(255,255,255,.48);
             }
 
             @keyframes nikolasSpin {
@@ -150,7 +148,7 @@
             @keyframes nikolasResultIn {
                 from {
                     opacity: 0;
-                    transform: translateX(-50%) translateY(15px);
+                    transform: translateX(-50%) translateY(12px);
                 }
                 to {
                     opacity: 1;
@@ -162,7 +160,7 @@
     }
 
     // =========================================================
-    // BOLINHA DE STATUS
+    // BOLINHA + ESCONDER CURSOR
     // =========================================================
     let mouseX = 0;
     let mouseY = 0;
@@ -191,23 +189,22 @@
         const ball = createBall();
         ball.className = "";
 
-        if (type === "loading") {
-            ball.textContent = "";
-            ball.classList.add("loading", "visible");
+        if (type === "loading" || type === "success" || type === "error") {
+            // Mostra a bolinha e esconde o cursor
             document.documentElement.classList.add("nikolas-hide-cursor");
-        } 
-        else if (type === "success") {
-            ball.textContent = "✓";
-            ball.classList.add("success", "visible");
-            document.documentElement.classList.add("nikolas-hide-cursor");
-        } 
-        else if (type === "error") {
-            ball.textContent = "✕";
-            ball.classList.add("error", "visible");
-            document.documentElement.classList.add("nikolas-hide-cursor");
-        } 
-        else {
-            // esconde a bolinha e devolve o cursor normal
+
+            if (type === "loading") {
+                ball.textContent = "";
+                ball.classList.add("loading", "visible");
+            } else if (type === "success") {
+                ball.textContent = "✓";
+                ball.classList.add("success", "visible");
+            } else {
+                ball.textContent = "✕";
+                ball.classList.add("error", "visible");
+            }
+        } else {
+            // Esconde a bolinha e devolve o cursor
             ball.classList.remove("visible");
             document.documentElement.classList.remove("nikolas-hide-cursor");
         }
@@ -333,7 +330,7 @@
     }
 
     // =========================================================
-    // PROMPT
+    // PROMPT (agora pede letra + texto da alternativa)
     // =========================================================
     function buildPrompt(data) {
         const optionsText = data.options.length
@@ -342,17 +339,16 @@
 
         return `
 Você é um professor especialista.
-Analise a questão abaixo e responda no formato obrigatório.
-
-FORMATO OBRIGATÓRIO (não invente outros títulos):
+Analise a questão abaixo e responda EXATAMENTE neste formato:
 
 RESPOSTA:
-[apenas a letra da alternativa correta, ex: B]
+[letra] - [texto completo da alternativa correta]
 
 RESOLUÇÃO:
-[explicação completa, clara e bem escrita do porquê essa é a resposta correta.
-Mostre o raciocínio passo a passo. Se tiver cálculo, mostre as contas.
-Se for português/inglês, explique a regra. Se for história/ciências, explique o conceito.]
+[explicação completa e clara do porquê essa é a resposta]
+
+Exemplo de como deve ser a RESPOSTA:
+A - 4
 
 QUESTÃO:
 ${data.questionText}
@@ -389,7 +385,7 @@ ${optionsText}
                         body: JSON.stringify({
                             contents: [{ parts: [{ text: prompt }] }],
                             generationConfig: {
-                                temperature: 0.15,
+                                temperature: 0.1,
                                 maxOutputTokens: 1100
                             }
                         })
@@ -436,40 +432,39 @@ ${optionsText}
     }
 
     // =========================================================
-    // SEPARAR RESPOSTA + PEGAR TEXTO DA ALTERNATIVA
+    // SEPARAR RESPOSTA
     // =========================================================
-    function parseAIResponse(text, options) {
+    function parseAIResponse(text) {
         const clean = String(text || "").trim();
 
-        let letter = "";
+        let fullAnswer = "";
         let resolution = clean;
 
-        const matchAnswer = clean.match(/RESPOSTA:\s*([A-H])/i);
+        // Tenta pegar no formato: A - 4
+        const matchAnswer = clean.match(/RESPOSTA:\s*([A-H]\s*-\s*.+?)(?:\n|$)/i);
         if (matchAnswer) {
-            letter = matchAnswer[1].toUpperCase();
+            fullAnswer = cleanText(matchAnswer[1]);
         }
 
+        // Fallback: tenta achar "A - algo"
+        if (!fullAnswer) {
+            const fallback = clean.match(/\b([A-H]\s*-\s*[^\n]+)/i);
+            if (fallback) fullAnswer = cleanText(fallback[1]);
+        }
+
+        // Último fallback: só a letra
+        if (!fullAnswer) {
+            const letterOnly = clean.match(/\b([A-H])\b/);
+            fullAnswer = letterOnly ? letterOnly[1].toUpperCase() : "?";
+        }
+
+        // Resolução
         const matchRes = clean.match(/RESOLUÇÃO:\s*([\s\S]*)/i);
         if (matchRes) {
             resolution = cleanText(matchRes[1]);
         }
 
-        if (!letter) {
-            const letterMatch = clean.match(/\b([A-H])\b/);
-            if (letterMatch) letter = letterMatch[1].toUpperCase();
-            else letter = "?";
-        }
-
-        // Busca o texto da alternativa correspondente
-        let fullAnswer = letter;
-        if (options && options.length) {
-            const found = options.find(o => o.letter === letter);
-            if (found) {
-                fullAnswer = `${letter} - ${found.text}`;
-            }
-        }
-
-        return { letter, fullAnswer, resolution, fullText: clean };
+        return { fullAnswer, resolution };
     }
 
     // =========================================================
@@ -496,7 +491,7 @@ ${optionsText}
         console.log(resolution);
         console.log("");
         console.log("%c────────────────────────────────────────", "color:#555;");
-        console.log("%cNikolas Scripts • Resposta Completa", "color:#888;font-size:11px;");
+        console.log("%cNikolas Scripts • v51.8", "color:#888;font-size:11px;");
     }
 
     // =========================================================
@@ -508,7 +503,7 @@ ${optionsText}
 
         const box = document.createElement("div");
         box.id = RESULT_ID;
-        box.className = success ? "" : "error";
+        if (!success) box.classList.add("error");
 
         const header = document.createElement("div");
         header.className = "nikolas-result-header";
@@ -530,8 +525,8 @@ ${optionsText}
         const hint = document.createElement("div");
         hint.className = "nikolas-result-hint";
         hint.textContent = success
-            ? "Resolução completa disponível no console (F12)"
-            : "Veja o console (F12) para detalhes do erro";
+            ? "Resolução completa no console (F12)"
+            : "Veja o console (F12) para detalhes";
 
         box.appendChild(header);
         box.appendChild(text);
@@ -541,9 +536,9 @@ ${optionsText}
         setTimeout(() => {
             if (box.isConnected) {
                 box.style.opacity = "0";
-                box.style.transform = "translateX(-50%) translateY(8px)";
-                box.style.transition = "opacity .25s ease, transform .25s ease";
-                setTimeout(() => box.remove(), 280);
+                box.style.transform = "translateX(-50%) translateY(10px)";
+                box.style.transition = "opacity .22s ease, transform .22s ease";
+                setTimeout(() => box.remove(), 250);
             }
         }, 7500);
     }
@@ -559,33 +554,30 @@ ${optionsText}
 
         try {
             const data = extractQuestion();
-            if (!data) throw new Error("Não consegui detectar a questão nesta página.");
+            if (!data) throw new Error("Não consegui detectar a questão.");
 
             const raw = await askGemini(data);
-            const parsed = parseAIResponse(raw, data.options);
+            const parsed = parseAIResponse(raw);
 
-            // Console → resolução completa
             printConsoleResolution(data, parsed.resolution, parsed.fullAnswer);
-
-            // Tela → resposta completa (ex: B - Efeito estufa)
             showResult(parsed.fullAnswer, true);
 
             setBallStatus("success");
-            await sleep(1600);
+            await sleep(1500);
 
         } catch (error) {
             console.error("[Nikolas] ERRO:", error);
             showResult(null, false);
             setBallStatus("error");
-            await sleep(1600);
+            await sleep(1500);
         } finally {
-            setBallStatus("normal"); // esconde bolinha + devolve o cursor
+            setBallStatus("normal"); // devolve o cursor
             busy = false;
         }
     }
 
     // =========================================================
-    // ESPAÇO
+    // TECLA ESPAÇO
     // =========================================================
     document.addEventListener("keydown", event => {
         if (event.code !== "Space") return;
@@ -602,8 +594,8 @@ ${optionsText}
     // =========================================================
     function init() {
         injectStyle();
-        console.log("%c[Nikolas v51.7] Carregado!", "color:#00ff88;font-size:14px;font-weight:bold;");
-        console.log("%cPressione ESPAÇO para analisar a questão.", "color:#00ffff;font-weight:bold;");
+        console.log("%c[Nikolas v51.8] Carregado!", "color:#00ff88;font-size:14px;font-weight:bold;");
+        console.log("%cPressione ESPAÇO para analisar.", "color:#00ffff;font-weight:bold;");
     }
 
     if (document.readyState === "loading") {
